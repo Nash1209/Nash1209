@@ -22,6 +22,7 @@
 | Project | 概要 | Tech |
 |---|---|---|
 | [excel-report-automation](https://github.com/Nash1209/excel-report-automation) | 複数Excel/CSVを検証・統合・集計し、複数シートのExcelレポートを自動生成する業務ツール | Python, pandas, openpyxl |
+| [csv-cleaning-automation](https://github.com/Nash1209/csv-cleaning-automation) | 文字コード・列名ゆれ・日付/金額/ステータス表記ゆれを自動整形するCSVクレンジングツール | Python, pandas, PyYAML |
 | [scroll-to-build-car](https://github.com/Nash1209/scroll-to-build-car) | スクロール連動で車が組み上がるインタラクション表現 | Vanilla JS, Canvas, Video |
 | [webgl-demon-face](https://github.com/Nash1209/webgl-demon-face) | glTFモデル + ポストエフェクトの3D表現デモ | three.js, WebGL |
 
