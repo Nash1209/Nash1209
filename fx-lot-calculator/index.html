@@ -14,79 +14,111 @@
 
     <!-- ========== 計算 ========== -->
     <section class="screen is-active" id="screen-calc">
-      <header class="screen-header">
+      <header class="calc-header">
         <h1>ロット計算</h1>
-        <p class="sub" id="calc-pair-label">USD/JPY</p>
+        <button class="icon-btn icon-btn-lg" id="btn-go-settings" type="button" aria-label="設定を開く">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h9M17 7h3M4 17h3M11 17h9"/><circle cx="14.5" cy="7" r="2.2"/><circle cx="8.5" cy="17" r="2.2"/></svg>
+        </button>
       </header>
 
-      <div class="hero card">
-        <div class="hero-label">発注ロット</div>
-        <div class="hero-number"><span id="res-lots">0.00</span><span class="hero-unit">lot</span></div>
-        <div class="hero-units">= <strong id="res-units">0</strong> 通貨</div>
-        <div class="hero-meta">
-          <span class="chip"><span class="chip-k">想定損失</span><span class="chip-v" id="res-loss">¥0</span></span>
-          <span class="chip"><span class="chip-k">損切幅</span><span class="chip-v" id="res-pips">0 pips</span></span>
-        </div>
-        <p class="hero-warn" id="res-warn" hidden></p>
-        <div class="hero-actions">
-          <button class="btn btn-primary" id="btn-copy" type="button">数量をコピー</button>
-          <button class="btn btn-secondary" id="btn-add-pos" type="button">保有に追加</button>
-        </div>
+      <button class="account-pill" id="account-pill" type="button">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3.5 7.5A2.5 2.5 0 0 1 6 5h11.5A2.5 2.5 0 0 1 20 7.5v9a2.5 2.5 0 0 1-2.5 2.5H6a2.5 2.5 0 0 1-2.5-2.5z"/><path d="M15 12h5.5v4H15a2 2 0 0 1 0-4z"/></svg>
+        <span class="account-pill-text" id="account-text">円口座・¥1,000,000</span>
+        <svg class="chev" viewBox="0 0 24 24" aria-hidden="true"><path d="M9 6l6 6-6 6"/></svg>
+      </button>
+
+      <div class="calc-hero" aria-live="polite">
+        <div class="calc-hero-label">計算ロット</div>
+        <div class="calc-hero-number"><span class="calc-lots" id="res-lots">—</span><span class="calc-lot-unit">lot</span></div>
+        <div class="calc-hero-units" id="res-units-line"><strong id="res-units">0</strong> 通貨</div>
+        <div class="calc-chip" id="res-chip" data-tone="ok"><span class="calc-chip-k">想定損失</span><span class="calc-chip-v" id="res-loss">¥0</span></div>
       </div>
 
-      <div class="group-title">価格</div>
-      <div class="card list">
-        <div class="row">
-          <label class="row-label" for="in-pair">通貨ペア</label>
-          <select class="row-input select" id="in-pair"></select>
-        </div>
-        <div class="row row-seg">
-          <div class="segmented" id="seg-mode" role="tablist">
-            <button type="button" data-mode="price" class="is-active" role="tab">価格で入力</button>
-            <button type="button" data-mode="pips" role="tab">pipsで入力</button>
-          </div>
-        </div>
-        <div class="row">
-          <label class="row-label" for="in-entry">エントリー価格</label>
-          <input class="row-input" id="in-entry" type="text" inputmode="decimal" placeholder="150.000">
-        </div>
-        <div class="row" data-mode-only="price">
-          <label class="row-label" for="in-stop">損切り価格</label>
-          <input class="row-input" id="in-stop" type="text" inputmode="decimal" placeholder="149.700">
-        </div>
-        <div class="row" data-mode-only="pips" hidden>
-          <label class="row-label" for="in-pips">損切り幅</label>
-          <div class="row-input with-suffix">
-            <input id="in-pips" type="text" inputmode="decimal" placeholder="30">
-            <span class="suffix">pips</span>
-          </div>
-        </div>
-        <div class="row" id="row-rate" hidden>
-          <label class="row-label" for="in-rate"><span id="rate-label">USD</span> → 円レート</label>
-          <input class="row-input" id="in-rate" type="text" inputmode="decimal" placeholder="150.00">
-        </div>
-      </div>
-      <p class="hint" id="hint-pip">JPYペアは 1 pip = 0.01、その他は 1 pip = 0.0001 で計算します。</p>
-
-      <div class="group-title">許容損失</div>
-      <div class="card list">
-        <div class="row">
-          <div class="row-label">日次枠で自動調整</div>
-          <label class="switch">
-            <input type="checkbox" id="sw-daily" checked>
-            <span class="switch-track"><span class="switch-thumb"></span></span>
+      <div class="card calc-card">
+        <div class="calc-pair-row">
+          <label class="pair-select" for="in-pair">
+            <select id="in-pair" aria-label="通貨ペア"></select>
+            <svg class="chev-down" viewBox="0 0 24 24" aria-hidden="true"><path d="M6 9l6 6 6-6"/></svg>
           </label>
+          <div class="segmented seg-side" id="seg-side" role="group" aria-label="売買方向">
+            <button type="button" data-side="buy" class="is-active" aria-pressed="true">買い</button>
+            <button type="button" data-side="sell" aria-pressed="false">売り</button>
+          </div>
         </div>
-        <div class="row kv"><span class="k">1回の許容損失</span><span class="v" id="bd-per-trade">¥0</span></div>
-        <div class="row kv sub-rows">
-          <div class="kv-line"><span class="k">日次上限</span><span class="v" id="bd-daily-limit">¥0</span></div>
-          <div class="kv-line"><span class="k">− 本日の確定損失</span><span class="v" id="bd-today-loss">¥0</span></div>
-          <div class="kv-line"><span class="k">− 保有分の想定損失</span><span class="v" id="bd-open-loss">¥0</span></div>
-          <div class="kv-line total"><span class="k">残り日次枠</span><span class="v" id="bd-remaining">¥0</span></div>
+
+        <div class="tabs-underline" id="seg-mode" role="tablist" aria-label="損切りの入力方法">
+          <button type="button" data-mode="price" class="is-active" role="tab" aria-selected="true">価格</button>
+          <button type="button" data-mode="pips" role="tab" aria-selected="false">pips</button>
         </div>
-        <div class="row kv"><span class="k strong">採用（小さい方）</span><span class="v strong green" id="bd-adopted">¥0</span></div>
+
+        <div class="fields">
+          <div class="field" id="field-entry">
+            <label class="field-label" for="in-entry">エントリー</label>
+            <input class="field-input" id="in-entry" type="text" inputmode="decimal" autocomplete="off" placeholder="150.000">
+          </div>
+          <div class="field" id="field-stop" data-mode-only="price">
+            <label class="field-label" for="in-stop">損切り</label>
+            <input class="field-input" id="in-stop" type="text" inputmode="decimal" autocomplete="off" placeholder="149.700">
+          </div>
+          <div class="field" id="field-pips" data-mode-only="pips" hidden>
+            <label class="field-label" for="in-pips">損切り幅</label>
+            <div class="field-with-suffix">
+              <input class="field-input" id="in-pips" type="text" inputmode="decimal" autocomplete="off" placeholder="30">
+              <span class="field-suffix">pips</span>
+            </div>
+          </div>
+        </div>
+        <p class="field-helper" id="calc-helper">損切り幅 — pips</p>
+
+        <div class="calc-row" id="row-rate" hidden>
+          <label class="calc-row-label" for="in-rate"><span id="rate-label">USD</span> → 円レート</label>
+          <input class="calc-row-input" id="in-rate" type="text" inputmode="decimal" autocomplete="off" placeholder="150.00">
+        </div>
+
+        <button class="calc-row calc-row-btn" id="row-risk" type="button">
+          <span class="calc-row-label">許容損失</span>
+          <span class="calc-row-value"><strong id="bd-risk-pct">1.0 %</strong><span class="calc-row-sub" id="bd-per-trade">¥10,000</span></span>
+          <svg class="chev" viewBox="0 0 24 24" aria-hidden="true"><path d="M9 6l6 6-6 6"/></svg>
+        </button>
       </div>
-      <p class="hint">発注刻み（<span id="hint-step">0.01 lot</span>）で切り捨てています。1 lot = <span id="hint-lot">10,000</span> 通貨。</p>
+
+      <details class="card budget" id="budget">
+        <summary class="calc-row budget-summary">
+          <svg class="row-icon" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="8.5"/><path d="M12 3.5V12h8.5"/></svg>
+          <span class="calc-row-label">今日の残り枠</span>
+          <span class="calc-row-value"><strong id="bd-remaining">¥30,000</strong></span>
+          <svg class="chev chev-toggle" viewBox="0 0 24 24" aria-hidden="true"><path d="M6 9l6 6 6-6"/></svg>
+        </summary>
+        <div class="budget-body">
+          <div class="kv-line"><span class="k">日次上限</span><span class="v" id="bd-daily-limit">¥0</span></div>
+          <div class="kv-line"><span class="k">本日の確定損失</span><span class="v" id="bd-today-loss">− ¥0</span></div>
+          <div class="kv-line"><span class="k">保有分の想定損失</span><span class="v" id="bd-open-loss">− ¥0</span></div>
+          <div class="kv-line total"><span class="k">採用する許容損失</span><span class="v" id="bd-adopted">¥0</span></div>
+          <div class="budget-switch">
+            <div>
+              <div class="budget-switch-label">残り枠に合わせて調整</div>
+              <div class="budget-switch-sub">1回の許容損失と残り枠の小さい方を使う</div>
+            </div>
+            <label class="switch">
+              <input type="checkbox" id="sw-daily" checked>
+              <span class="switch-track"><span class="switch-thumb"></span></span>
+            </label>
+          </div>
+        </div>
+      </details>
+
+      <div class="calc-actions">
+        <button class="btn btn-primary btn-copy" id="btn-copy" type="button">
+          <svg class="btn-icon" viewBox="0 0 24 24" aria-hidden="true"><rect x="9" y="9" width="11" height="11" rx="2"/><path d="M15 9V6a2 2 0 0 0-2-2H6a2 2 0 0 0-2 2v7a2 2 0 0 0 2 2h3"/></svg>
+          <svg class="btn-icon btn-icon-done" viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7.5"/></svg>
+          <span id="btn-copy-label">数量をコピー</span>
+        </button>
+        <button class="link-btn link-btn-add" id="btn-add-pos" type="button">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg>
+          <span>保有分に追加</span>
+        </button>
+        <p class="calc-note">コスト・滑りは未反映。<span id="hint-step">0.01 lot</span> 刻みで切り捨て、1 lot = <span id="hint-lot">10,000</span> 通貨。</p>
+      </div>
     </section>
 
     <!-- ========== 保有・記録 ========== -->
@@ -248,7 +280,7 @@
     </div>
   </div>
 
-  <div class="toast" id="toast" hidden></div>
+  <div class="toast" id="toast" role="status" hidden></div>
 
   <script src="app.js"></script>
 </body>

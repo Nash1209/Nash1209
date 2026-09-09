@@ -27,7 +27,7 @@
     copyTarget: 'lots',
     dailyAdjust: true,
   };
-  const DEFAULT_CALC = { pair: 'USD/JPY', mode: 'price', entry: '', stop: '', pips: '' };
+  const DEFAULT_CALC = { pair: 'USD/JPY', mode: 'price', side: 'buy', entry: '', stop: '', pips: '' };
 
   // ---------- ストレージ ----------
   const load = (key, fallback) => {
@@ -65,8 +65,9 @@
   };
   const fmtLots = (lots, step) => {
     const dec = Math.max(0, Math.min(4, -Math.floor(Math.log10(step))));
-    return lots.toFixed(dec);
+    return lots.toLocaleString('ja-JP', { minimumFractionDigits: dec, maximumFractionDigits: dec });
   };
+  const isBlank = (v) => String(v ?? '').trim() === '';
   const fmtInt = (v) => Math.round(v).toLocaleString('ja-JP');
   const todayKey = (d = new Date()) => {
     const p = (n) => String(n).padStart(2, '0');
@@ -122,16 +123,27 @@
 
     let distance = NaN;
     let warn = '';
+    let empty = false;          // まだ入力していない（エラーではない）
+    const invalid = { entry: false, stop: false, pips: false };
     if (calc.mode === 'price') {
-      if (isFinite(entry) && isFinite(stop)) distance = Math.abs(entry - stop);
-      else warn = 'エントリー価格と損切り価格を入力してください';
+      if (!isBlank(calc.entry) && !isFinite(entry)) invalid.entry = true;
+      if (!isBlank(calc.stop) && !isFinite(stop)) invalid.stop = true;
+      if (invalid.entry || invalid.stop) warn = '数字で入力してください';
+      else if (isBlank(calc.entry) || isBlank(calc.stop)) { empty = true; warn = 'エントリーと損切りの価格を入力'; }
+      else {
+        distance = Math.abs(entry - stop);
+        if (calc.side === 'buy' && stop > entry) { warn = '買いの損切りはエントリーより下に'; invalid.stop = true; }
+        if (calc.side === 'sell' && stop < entry) { warn = '売りの損切りはエントリーより上に'; invalid.stop = true; }
+      }
     } else {
-      if (isFinite(pipsIn)) distance = Math.abs(pipsIn) * pipSize;
-      else warn = '損切り幅（pips）を入力してください';
+      if (!isBlank(calc.pips) && !isFinite(pipsIn)) { invalid.pips = true; warn = '数字で入力してください'; }
+      else if (isBlank(calc.pips)) { empty = true; warn = '損切り幅（pips）を入力'; }
+      else distance = Math.abs(pipsIn) * pipSize;
+      if (!isBlank(calc.entry) && !isFinite(entry)) { invalid.entry = true; warn = '数字で入力してください'; }
     }
-    if (!warn && quote !== 'JPY' && !(rate > 0)) warn = `${quote} → 円 のレートを入力してください`;
-    if (!warn && !(distance > 0)) warn = '損切り幅が 0 です';
-    if (!warn && !(b.capital > 0)) warn = '設定で口座資金を入力してください';
+    if (!warn && quote !== 'JPY' && !(rate > 0)) warn = `${quote} → 円 のレートを入力`;
+    if (!warn && !(distance > 0)) { warn = '損切り幅が 0 です'; if (calc.mode === 'price') invalid.stop = true; else invalid.pips = true; }
+    if (!warn && !(b.capital > 0)) warn = '設定で口座資金を入力';
 
     const pips = distance / pipSize;
     const lossPerUnit = distance * rate; // 1通貨あたりの損失（円）
@@ -147,51 +159,98 @@
       units = Math.round(lots * lotUnit);
       loss = units * lossPerUnit;
       if (n <= 0) warn = b.adopted <= 0 && settings.dailyAdjust
-        ? '残り日次枠がありません。今日はここまで。'
-        : '許容損失内で発注できる最小刻みに届きません';
+        ? '残り枠がありません。今日はここまで'
+        : `許容損失内では最小刻み ${step} lot に届きません`;
     }
-    return { ...b, pair, pips, distance, lossPerUnit, lots, units, loss, step, lotUnit, warn, quote, rate };
+    const zeroBudget = settings.dailyAdjust && b.adopted <= 0 && b.capital > 0;
+    return { ...b, pair, pips, distance, lossPerUnit, lots, units, loss, step, lotUnit, warn, empty, invalid, zeroBudget, quote, rate };
   };
 
   // ---------- 描画：計算画面 ----------
+  const pct = (v) => (Number(v) || 0).toLocaleString('ja-JP', { minimumFractionDigits: 1, maximumFractionDigits: 2 }) + ' %';
+
   const renderCalc = () => {
     const r = compute();
-    $('calc-pair-label').textContent = r.pair;
-    $('res-lots').textContent = fmtLots(r.lots, r.step);
-    $('res-units').textContent = fmtInt(r.units);
-    $('res-loss').textContent = yen(r.loss);
-    $('res-pips').textContent = (isFinite(r.pips) ? (Math.round(r.pips * 10) / 10).toLocaleString('ja-JP') : '0') + ' pips';
-    const warnEl = $('res-warn');
-    warnEl.hidden = !r.warn;
-    warnEl.textContent = r.warn;
-    $('btn-copy').disabled = !(r.units > 0);
-    $('btn-add-pos').disabled = !(r.units > 0);
+    const hasResult = r.units > 0;
 
-    $('bd-per-trade').textContent = yen(r.perTrade);
-    $('bd-daily-limit').textContent = yen(r.dailyLimit);
-    $('bd-today-loss').textContent = yen(r.todayLoss);
-    $('bd-open-loss').textContent = yen(r.openLoss);
-    $('bd-remaining').textContent = yen(r.remaining);
-    $('bd-adopted').textContent = yen(r.adopted);
-    $('hint-step').textContent = `${r.step} lot`;
-    $('hint-lot').textContent = fmtInt(r.lotUnit);
+    // 口座ピル
+    $('account-text').textContent = r.capital > 0 ? `円口座・${yen(r.capital)}` : '口座資金を設定してください';
 
-    // モード切替の表示
-    document.querySelectorAll('[data-mode-only]').forEach((el) => {
-      el.hidden = el.dataset.modeOnly !== calc.mode;
-    });
+    // ヒーロー
+    const lotsEl = $('res-lots');
+    const lotsText = hasResult ? fmtLots(r.lots, r.step) : (r.zeroBudget ? '0' : fmtLots(0, r.step));
+    lotsEl.textContent = lotsText;
+    lotsEl.classList.toggle('is-empty', !hasResult);
+    lotsEl.classList.toggle('is-long', lotsText.length > 6 && lotsText.length <= 8);
+    lotsEl.classList.toggle('is-xlong', lotsText.length > 8);
+    const unitsLine = $('res-units-line');
+    unitsLine.classList.toggle('is-empty', !hasResult);
+    if (hasResult) unitsLine.innerHTML = `<strong id="res-units">${fmtInt(r.units)}</strong> 通貨`;
+    else if (r.empty) unitsLine.textContent = '価格を入力すると計算します';
+    else unitsLine.innerHTML = `<strong id="res-units">0</strong> 通貨`;
+
+    const chip = $('res-chip');
+    if (hasResult) {
+      chip.dataset.tone = 'ok';
+      chip.innerHTML = `<span class="calc-chip-k">想定損失</span><span class="calc-chip-v" id="res-loss">${yen(r.loss)}</span>`;
+    } else if (r.empty) {
+      chip.dataset.tone = 'muted';
+      chip.innerHTML = `<span class="calc-chip-k">${r.warn}</span>`;
+    } else {
+      chip.dataset.tone = 'warn';
+      chip.innerHTML = `<span class="calc-chip-k">${r.warn}</span>`;
+    }
+
+    // 入力
+    document.querySelectorAll('[data-mode-only]').forEach((el) => { el.hidden = el.dataset.modeOnly !== calc.mode; });
     document.querySelectorAll('#seg-mode button').forEach((b) => {
-      b.classList.toggle('is-active', b.dataset.mode === calc.mode);
+      const on = b.dataset.mode === calc.mode;
+      b.classList.toggle('is-active', on);
+      b.setAttribute('aria-selected', on ? 'true' : 'false');
     });
-    // 換算レート行
+    document.querySelectorAll('#seg-side button').forEach((b) => {
+      const on = b.dataset.side === calc.side;
+      b.classList.toggle('is-active', on);
+      b.setAttribute('aria-pressed', on ? 'true' : 'false');
+    });
+    $('field-entry').classList.toggle('is-invalid', r.invalid.entry);
+    $('field-stop').classList.toggle('is-invalid', r.invalid.stop);
+    $('field-pips').classList.toggle('is-invalid', r.invalid.pips);
+    const helper = $('calc-helper');
+    const fieldError = r.invalid.entry || r.invalid.stop || r.invalid.pips;
+    helper.classList.toggle('is-error', fieldError);
+    if (fieldError) helper.textContent = r.warn;
+    else if (isFinite(r.pips) && r.pips > 0) helper.textContent = `損切り幅 ${(Math.round(r.pips * 10) / 10).toLocaleString('ja-JP', { minimumFractionDigits: 1 })} pips`;
+    else helper.textContent = r.quote === 'JPY' ? '損切り幅 — pips（1 pip = 0.01）' : '損切り幅 — pips（1 pip = 0.0001）';
+    $('field-entry').querySelector('label').textContent = calc.mode === 'pips' ? 'エントリー（任意）' : 'エントリー';
+
     const rowRate = $('row-rate');
     rowRate.hidden = r.quote === 'JPY';
     $('rate-label').textContent = r.quote;
-    const dec = priceDecimals(r.pair);
     $('in-entry').placeholder = r.quote === 'JPY' ? '150.000' : '1.08500';
     $('in-stop').placeholder = r.quote === 'JPY' ? '149.700' : '1.08200';
-    $('in-pips').placeholder = '30';
-    $('in-entry').setAttribute('data-dec', dec);
+
+    // 許容損失・残り枠
+    $('bd-risk-pct').textContent = pct(settings.riskPct);
+    $('bd-per-trade').textContent = yen(r.perTrade);
+    $('bd-remaining').textContent = yen(r.remaining);
+    $('bd-daily-limit').textContent = yen(r.dailyLimit);
+    $('bd-today-loss').textContent = '− ' + yen(r.todayLoss);
+    $('bd-open-loss').textContent = '− ' + yen(r.openLoss);
+    $('bd-adopted').textContent = yen(r.adopted);
+    $('budget').classList.toggle('is-zero', r.capital > 0 && r.remaining <= 0);
+    $('hint-step').textContent = `${r.step} lot`;
+    $('hint-lot').textContent = fmtInt(r.lotUnit);
+
+    // 主操作
+    const copyBtn = $('btn-copy');
+    if (!copyBtn.classList.contains('is-done')) {
+      $('btn-copy-label').textContent = hasResult
+        ? (settings.copyTarget === 'units' ? `${fmtInt(r.units)} 通貨をコピー` : `${fmtLots(r.lots, r.step)} lot をコピー`)
+        : '数量をコピー';
+    }
+    copyBtn.disabled = !hasResult;
+    $('btn-add-pos').disabled = !hasResult;
   };
 
   // ---------- 描画：保有・記録 ----------
@@ -223,7 +282,7 @@
         el.className = 'item';
         el.innerHTML = `
           <div class="item-main">
-            <div class="item-title"><span>${p.pair}</span><span class="lots">${fmtLots(p.lots, p.step)} lot</span></div>
+            <div class="item-title"><span>${p.pair}</span><span class="lots">${fmtLots(p.lots, p.step)} lot</span>${p.side ? `<span class="side ${p.side}">${p.side === 'sell' ? '売り' : '買い'}</span>` : ''}</div>
             <div class="item-sub">${fmtInt(p.units)} 通貨 ・ ${p.entry != null ? p.entry + ' → ' + p.stop : (Math.round(p.pips * 10) / 10) + ' pips'} ・ 想定損失 ${yen(p.expectedLoss)}</div>
           </div>
           <button class="pill-btn" type="button" data-close="${p.id}">決済</button>
@@ -322,7 +381,18 @@
     if (!b) return;
     calc.mode = b.dataset.mode;
     persistCalc();
+    const target = calc.mode === 'pips' ? $('in-pips') : $('in-stop');
+    if (isBlank(target.value)) target.focus();
   });
+  $('seg-side').addEventListener('click', (ev) => {
+    const b = ev.target.closest('button[data-side]');
+    if (!b) return;
+    calc.side = b.dataset.side;
+    persistCalc();
+  });
+  $('btn-go-settings').addEventListener('click', () => showScreen('settings'));
+  $('account-pill').addEventListener('click', () => { showScreen('settings'); setTimeout(() => $('set-capital').focus(), 200); });
+  $('row-risk').addEventListener('click', () => { showScreen('settings'); setTimeout(() => $('set-risk').focus(), 200); });
   $('in-entry').addEventListener('input', (ev) => { calc.entry = ev.target.value; persistCalc(); });
   $('in-stop').addEventListener('input', (ev) => { calc.stop = ev.target.value; persistCalc(); });
   $('in-pips').addEventListener('input', (ev) => { calc.pips = ev.target.value; persistCalc(); });
@@ -353,12 +423,22 @@
       return true;
     } catch { return false; }
   };
+  let copyDoneTimer = null;
   $('btn-copy').addEventListener('click', async () => {
     const r = compute();
     if (!(r.units > 0)) return;
-    const text = settings.copyTarget === 'units' ? String(r.units) : fmtLots(r.lots, r.step);
+    // クリップボードには桁区切りなしの素の数値を入れる（発注画面に貼るため）
+    const text = settings.copyTarget === 'units' ? String(r.units) : r.lots.toFixed(Math.max(0, -Math.floor(Math.log10(r.step))));
     const ok = await copyText(text);
-    toast(ok ? `${text} をコピーしました` : 'コピーできませんでした');
+    const btn = $('btn-copy');
+    clearTimeout(copyDoneTimer);
+    if (ok) {
+      btn.classList.add('is-done');
+      $('btn-copy-label').textContent = `${text} をコピーしました`;
+      copyDoneTimer = setTimeout(() => { btn.classList.remove('is-done'); renderCalc(); }, 1600);
+    } else {
+      toast('コピーできませんでした');
+    }
   });
 
   // 保有に追加
@@ -369,6 +449,7 @@
     positions.push({
       id: uid(),
       pair: r.pair,
+      side: calc.side,
       lots: r.lots,
       units: r.units,
       step: r.step,
