@@ -1,0 +1,17 @@
+# Claude Code local state
+.claude/settings.local.json
+.claude/projects/
+
+# Impeccable: engine binary cache and generated sidecars (skill files are tracked)
+**/skills/impeccable/scripts/bin/
+**/skills/impeccable/scripts/config.json
+**/.impeccable/hook.cache.json
+**/.impeccable/hook.pending.json
+.impeccable/live/
+.impeccable/history/
+.impeccable/config.local.json
+.impeccable/critique/*
+!.impeccable/critique/ignore.md
+
+# Node
+node_modules/
