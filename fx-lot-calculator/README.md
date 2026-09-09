@@ -23,6 +23,17 @@ pip 幅        = JPY ペア: 0.01 / その他: 0.0001
 
 決済通貨が円以外（EUR/USD など）の場合は、決済通貨→円のレート（例: USD/JPY）を入力してください。
 
+## 公開（Vercel）
+
+リポジトリ直下の `vercel.json` が `outputDirectory: fx-lot-calculator` を指しているので、ビルドなしでこのディレクトリがそのまま配信されます。
+
+1. https://vercel.com/new で GitHub の `Nash1209/Nash1209` を Import する
+2. Framework Preset は **Other**、Build Command は空のまま。`vercel.json` が読まれない場合は **Root Directory** を `fx-lot-calculator` に設定する
+3. Deploy を押すと `https://<project>.vercel.app/` で公開される。以降は `main` への push で自動更新
+
+ワンクリック用リンク:
+`https://vercel.com/new/clone?repository-url=https://github.com/Nash1209/Nash1209&project-name=fx-lot-calculator&root-directory=fx-lot-calculator`
+
 ## 使い方
 
 `index.html` をブラウザで開くだけで動作します。GitHub Pages でも配信できます。
