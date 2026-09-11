@@ -2,5 +2,14 @@
   "name": "nash1209",
   "private": true,
   "type": "module",
-  "engines": { "node": ">=20" }
+  "engines": { "node": ">=20" },
+  "scripts": {
+    "dev": "node scripts/dev.mjs",
+    "test": "node --test tests/*.test.mjs",
+    "test:e2e": "node tests/e2e/run.mjs",
+    "design:detect": ".claude/skills/impeccable/scripts/impeccable detect --json fx-lot-calculator"
+  },
+  "devDependencies": {
+    "playwright": "^1.47.0"
+  }
 }

@@ -80,6 +80,18 @@ pip 幅        = JPY ペア: 0.01 / その他: 0.0001
 ワンクリック用リンク:
 `https://vercel.com/new/clone?repository-url=https://github.com/Nash1209/Nash1209&project-name=fx-lot-calculator&root-directory=fx-lot-calculator`
 
+## ローカル開発
+
+```bash
+git clone https://github.com/Nash1209/Nash1209.git && cd Nash1209
+cp .env.example .env.local      # Supabase / Twelve Data のキーを入れる（任意）
+npm run dev                     # http://localhost:3000（静的配信 + /api/quote, /api/config）
+npm test                        # ユニットテスト
+npm i && npx playwright install chromium && npm run test:e2e   # ブラウザ E2E
+```
+
+`npm run dev` は依存パッケージなしの Node スクリプト（`scripts/dev.mjs`）で、`api/*.js` を Vercel と同じ形で呼びます。Vercel CLI を使う場合は `vercel dev` でも同じ構成で動きます。Claude Code で作業する場合はリポジトリ直下の `CLAUDE.md` を参照してください。
+
 ## 使い方
 
 `index.html` をブラウザで開くだけで動作します。GitHub Pages でも配信できます。
