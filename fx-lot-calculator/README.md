@@ -17,9 +17,13 @@
 
 取得元は Vercel の Serverless Function `api/quote.js`（`GET /api/quote?pair=USD/JPY`）です。
 
-1. Yahoo Finance チャート API（分足、**参考値・遅延あり**）
-2. open.er-api.com（日次レート）— ピルに「日次」と表示
-3. Frankfurter / ECB（日次レート）
+1. Twelve Data（Vercel の環境変数 `TWELVEDATA_API_KEY` を設定した場合のみ。無料枠あり）
+2. Yahoo Finance チャート API（分足、**参考値・遅延あり**）
+3. Stooq（遅延あり）
+4. open.er-api.com（日次レート）— 「日次」と表示
+5. Frankfurter / ECB（日次レート）
+
+`/api/quote?pair=USD/JPY` をブラウザで開くと、`source`（採用した取得元）と `tried`（失敗した取得元と理由）が見えるので、どこで止まっているか切り分けできます。
 
 `/api/quote` が使えない環境（`file://` で開いた場合など）では、ブラウザから日次レート API を直接呼びます。表示される価格は発注数量の目安のためのもので、約定価格の保証はありません。
 

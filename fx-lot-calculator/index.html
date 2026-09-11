@@ -12,7 +12,7 @@
   <meta property="og:type" content="website">
   <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='14' fill='%230F4D3A'/%3E%3Ctext x='32' y='42' text-anchor='middle' font-family='-apple-system,Helvetica,Arial,sans-serif' font-size='30' font-weight='700' fill='%23fff'%3Elot%3C/text%3E%3C/svg%3E">
   <title>FX Lot Calculator</title>
-  <link rel="stylesheet" href="style.css">
+  <link rel="stylesheet" href="style.css?v=20260911b">
 </head>
 <body>
   <main class="app">
@@ -75,7 +75,7 @@
         </div>
         <div class="field-meta">
           <p class="field-helper" id="calc-helper">損切り幅 — pips</p>
-          <button class="live-pill" id="live-pill" type="button" data-state="idle" title="現在値をエントリーに入れる">
+          <button class="live" id="live-pill" type="button" data-state="idle" title="現在値をエントリーに入れる">
             <svg class="live-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M20 12a8 8 0 0 1-14.2 5M4 12a8 8 0 0 1 14.2-5"/><path d="M18 3v4h-4M6 21v-4h4"/></svg>
             <span class="live-text" id="live-text">現在値</span>
             <span class="live-time" id="live-time"></span>
@@ -306,6 +306,6 @@
 
   <div class="toast" id="toast" role="status" hidden></div>
 
-  <script src="app.js"></script>
+  <script src="app.js?v=20260911b"></script>
 </body>
 </html>

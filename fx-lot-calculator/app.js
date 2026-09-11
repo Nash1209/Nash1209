@@ -270,12 +270,12 @@
     const time = $('live-time');
     if (status === 'off') { text.textContent = ''; time.textContent = ''; return; }
     if (!q) {
-      text.textContent = status === 'loading' ? '現在値を取得中' : status === 'error' ? '現在値を取得できません' : '現在値';
+      text.textContent = status === 'loading' ? '取得中' : status === 'error' ? '取得できません' : '現在値';
       time.textContent = status === 'error' ? '再試行' : '';
       pill.title = '現在値を取得してエントリーに入れる';
       return;
     }
-    text.textContent = `${status === 'daily' ? '日次 ' : '現在値 '}${q.price.toFixed(priceDecimals(calc.pair))}`;
+    text.textContent = `${status === 'daily' ? '日次 ' : ''}${q.price.toFixed(priceDecimals(calc.pair))}`;
     time.textContent = status === 'loading' ? '更新中' : status === 'error' ? '再試行' : fmtTime(new Date(q.time).toISOString());
     pill.title = `${q.source}・${new Date(q.time).toLocaleString('ja-JP')}${q.daily ? '（日次レート）' : '（参考値・遅延あり）'}。タップでエントリーに入れる`;
   };
