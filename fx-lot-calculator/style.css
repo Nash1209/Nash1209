@@ -655,3 +655,125 @@ button { cursor: pointer; }
 @keyframes spin { to { transform: rotate(360deg); } }
 @media (prefers-reduced-motion: reduce) { .live[data-state="loading"] .live-icon { animation: none; } }
 @media (max-width: 359px) { .live { max-width: 50%; } }
+
+/* ==========================================================
+   損益の内訳（ドーナツ＋通貨ペア別）
+   ========================================================== */
+:root { --chart-profit: #1E6B4F; --chart-loss: #E07A5F; }
+@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) { --chart-profit: #3E9A78; --chart-loss: #F4A58A; } }
+:root[data-theme="dark"] { --chart-profit: #3E9A78; --chart-loss: #F4A58A; }
+
+.pnl { margin-top: 12px; padding: 14px 16px 12px; }
+.pnl-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+.pnl-title { font-size: 15px; font-weight: 600; }
+.seg-period { width: auto; }
+.seg-period button { min-width: 52px; padding: 5px 0; font-size: 12.5px; min-height: 28px; }
+.pnl-body { display: flex; align-items: center; gap: 18px; margin-top: 12px; }
+.donut { width: 132px; height: 132px; flex: 0 0 auto; }
+.donut-track { stroke: var(--line); }
+.donut-profit { stroke: var(--chart-profit); }
+.donut-loss { stroke: var(--chart-loss); }
+.donut-net { font-size: 15px; font-weight: 600; fill: var(--ink); font-variant-numeric: tabular-nums; }
+.donut-net.pos { fill: var(--green); }
+.donut-net.neg { fill: var(--red); }
+.donut-sub { font-size: 8.5px; fill: var(--muted); }
+.pnl-legend { flex: 1 1 auto; min-width: 0; display: flex; flex-direction: column; gap: 8px; }
+.legend-row { display: grid; grid-template-columns: 10px auto 1fr auto; align-items: baseline; gap: 8px; font-size: 14px; }
+.legend-row .k { color: var(--ink-2); }
+.legend-row .v { text-align: right; font-weight: 600; font-variant-numeric: tabular-nums; }
+.legend-row .v.pos { color: var(--green); }
+.legend-row .v.neg { color: var(--red); }
+.legend-row .n { color: var(--muted); font-size: 12.5px; font-variant-numeric: tabular-nums; }
+.swatch { width: 10px; height: 10px; border-radius: 3px; display: inline-block; align-self: center; }
+.swatch.profit { background: var(--chart-profit); }
+.swatch.loss { background: var(--chart-loss); }
+.pnl-pairs { display: flex; flex-direction: column; gap: 6px; margin-top: 14px; padding-top: 12px; border-top: 1px solid var(--line); }
+.pnl-pairs:empty { display: none; }
+.pair-row { display: grid; grid-template-columns: 76px 1fr auto; align-items: center; gap: 10px; font-size: 13px; }
+.pair-name { color: var(--ink-2); font-variant-numeric: tabular-nums; }
+.pair-bar { height: 6px; border-radius: 3px; background: var(--control); overflow: hidden; }
+.pair-fill { display: block; height: 100%; border-radius: 3px; }
+.pair-fill.profit { background: var(--chart-profit); }
+.pair-fill.loss { background: var(--chart-loss); }
+.pair-val { font-variant-numeric: tabular-nums; min-width: 72px; text-align: right; }
+.pair-val.pos { color: var(--green); }
+.pair-val.neg { color: var(--red); }
+@media (max-width: 359px) { .pnl-body { gap: 12px; } .donut { width: 112px; height: 112px; } .pair-row { grid-template-columns: 64px 1fr auto; } }
+
+/* ==========================================================
+   スクショ OCR（記録シート内）
+   ========================================================== */
+.ocr { margin-top: 12px; }
+.ocr-pick {
+  display: flex; align-items: center; justify-content: center; gap: 8px;
+  min-height: 48px; padding: 10px 14px;
+  border: 1.5px dashed var(--line); border-radius: 14px;
+  background: var(--card);
+  color: var(--green); font-size: 15px; font-weight: 500;
+  cursor: pointer;
+}
+.ocr-pick svg { width: 20px; height: 20px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
+.ocr-pick:active { filter: brightness(.97); }
+.ocr-status { margin: 8px 4px 0; font-size: 13px; color: var(--muted); }
+.ocr-results { display: flex; flex-direction: column; gap: 8px; margin-top: 10px; }
+.ocr-row {
+  display: grid; grid-template-columns: 22px 1fr 1fr; align-items: center; gap: 10px;
+  padding: 8px 12px; border-radius: 12px; background: var(--card);
+}
+.ocr-row input[type="checkbox"] { width: 18px; height: 18px; accent-color: var(--green-fill); margin: 0; }
+.ocr-pair { -webkit-appearance: none; appearance: none; border: 0; background: transparent; font-size: 15px; font-weight: 600; color: var(--ink); padding: 6px 0; min-width: 0; }
+.ocr-pnl { width: 100%; min-width: 0; border: 0; border-bottom: 2px solid var(--line); background: transparent; text-align: right; font-size: 17px; font-weight: 500; font-variant-numeric: tabular-nums; padding: 4px 0; color: var(--ink); }
+.ocr-pnl:focus { outline: 0; border-bottom-color: var(--green); }
+.ocr-add { margin-top: 4px; }
+
+/* ==========================================================
+   ログイン画面
+   ========================================================== */
+.auth {
+  position: fixed; inset: 0; z-index: 30;
+  overflow-y: auto;
+  background: var(--bg);
+  padding: calc(24px + env(safe-area-inset-top)) 16px calc(24px + env(safe-area-inset-bottom));
+}
+body.auth-open { overflow: hidden; }
+.auth-inner { max-width: 420px; margin: 0 auto; display: flex; flex-direction: column; gap: 14px; }
+.auth-head { text-align: center; padding: 12px 0 6px; }
+.auth-mark {
+  width: 56px; height: 56px; margin: 0 auto 12px;
+  border-radius: 14px; background: var(--green-fill); color: #fff;
+  display: flex; align-items: center; justify-content: center;
+  font-size: 22px; font-weight: 700; letter-spacing: -0.02em;
+}
+.auth-head h1 { margin: 0; font-size: 24px; font-weight: 600; letter-spacing: 0; }
+.auth-head p { margin: 4px 0 0; color: var(--muted); font-size: 14px; }
+.seg-auth { width: 100%; }
+.auth-form { display: flex; flex-direction: column; gap: 16px; padding: 18px 16px 16px; }
+.auth-form h2 { margin: 0; font-size: 18px; font-weight: 600; }
+.auth-form .field-input { font-size: 17px; }
+.auth-form .btn { width: 100%; min-height: 50px; font-size: 16px; }
+.auth-link { align-self: center; min-height: 40px; }
+.auth-note { margin: -4px 0 0; font-size: 12.5px; color: var(--muted); }
+.auth-guest { align-self: center; color: var(--muted); font-size: 14px; font-weight: 500; min-height: 44px; }
+.auth-msg { margin: 0; padding: 10px 14px; border-radius: 12px; font-size: 14px; background: var(--control); color: var(--ink-2); }
+.auth-msg[data-tone="error"] { background: var(--red-soft); color: var(--red); }
+.auth-msg[data-tone="ok"] { background: var(--green-soft); color: var(--green-ink); }
+.check { display: flex; align-items: flex-start; gap: 10px; font-size: 14.5px; color: var(--ink); cursor: pointer; }
+.check input { position: absolute; opacity: 0; width: 0; height: 0; }
+.check-box {
+  flex: 0 0 auto; width: 22px; height: 22px; margin-top: 1px;
+  border: 1.5px solid var(--muted); border-radius: 7px; background: var(--card);
+  display: inline-flex; align-items: center; justify-content: center;
+  transition: background .15s, border-color .15s;
+}
+.check-box svg { width: 14px; height: 14px; fill: none; stroke: #fff; stroke-width: 2.4; stroke-linecap: round; stroke-linejoin: round; opacity: 0; }
+.check input:checked + .check-box { background: var(--green-fill); border-color: var(--green-fill); }
+.check input:checked + .check-box svg { opacity: 1; }
+.check input:focus-visible + .check-box { outline: 2px solid var(--green); outline-offset: 2px; }
+.btn.is-busy { opacity: .7; }
+
+/* 設定: アカウント */
+.acct-mail { display: inline-flex; align-items: center; gap: 8px; min-width: 0; }
+.acct-mail span:first-child { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.sync-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--muted); flex: 0 0 auto; }
+.sync-dot[data-state="ok"] { background: var(--green); }
+.sync-dot[data-state="error"] { background: var(--red); }
