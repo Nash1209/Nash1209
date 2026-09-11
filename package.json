@@ -1,0 +1,6 @@
+{
+  "name": "nash1209",
+  "private": true,
+  "type": "module",
+  "engines": { "node": ">=20" }
+}

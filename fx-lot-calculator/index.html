@@ -73,7 +73,14 @@
             </div>
           </div>
         </div>
-        <p class="field-helper" id="calc-helper">損切り幅 — pips</p>
+        <div class="field-meta">
+          <p class="field-helper" id="calc-helper">損切り幅 — pips</p>
+          <button class="live-pill" id="live-pill" type="button" data-state="idle" title="現在値をエントリーに入れる">
+            <svg class="live-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M20 12a8 8 0 0 1-14.2 5M4 12a8 8 0 0 1 14.2-5"/><path d="M18 3v4h-4M6 21v-4h4"/></svg>
+            <span class="live-text" id="live-text">現在値</span>
+            <span class="live-time" id="live-time"></span>
+          </button>
+        </div>
 
         <div class="calc-row" id="row-rate" hidden>
           <label class="calc-row-label" for="in-rate"><span id="rate-label">USD</span> → 円レート</label>
@@ -226,6 +233,18 @@
           </select>
         </div>
       </div>
+
+      <div class="group-title">価格の取得</div>
+      <div class="card list">
+        <div class="row">
+          <div class="row-label">現在値を自動取得</div>
+          <label class="switch">
+            <input type="checkbox" id="set-live" checked>
+            <span class="switch-track"><span class="switch-thumb"></span></span>
+          </label>
+        </div>
+      </div>
+      <p class="hint">通貨ペアを選ぶと現在値（Yahoo Finance の参考値・遅延あり）をエントリーと換算レートに入れ、手入力するまで 60 秒ごとに追従します。取得できない場合は日次レートを使います。</p>
 
       <div class="group-title">データ</div>
       <div class="card list">

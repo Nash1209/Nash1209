@@ -17,6 +17,7 @@
     rates: 'fxlot.rates.v1',
     positions: 'fxlot.positions.v1',
     log: 'fxlot.log.v1',
+    quotes: 'fxlot.quotes.v1',
   };
   const DEFAULT_SETTINGS = {
     capital: 1000000,
@@ -26,8 +27,9 @@
     step: 0.01,
     copyTarget: 'lots',
     dailyAdjust: true,
+    liveQuote: true,
   };
-  const DEFAULT_CALC = { pair: 'USD/JPY', mode: 'price', side: 'buy', entry: '', stop: '', pips: '' };
+  const DEFAULT_CALC = { pair: 'USD/JPY', mode: 'price', side: 'buy', entry: '', stop: '', pips: '', entryAuto: true, rateAuto: true };
 
   // ---------- ストレージ ----------
   const load = (key, fallback) => {
@@ -47,6 +49,7 @@
   let rates = load(KEYS.rates, {});          // { USD: 150.2, GBP: 190.1 ... }
   let positions = load(KEYS.positions, []);  // 保有
   let log = load(KEYS.log, []);              // 決済記録
+  let quotes = load(KEYS.quotes, {});        // 現在値キャッシュ { 'USD/JPY': { price, time, source, daily } }
 
   // ---------- ユーティリティ ----------
   const $ = (id) => document.getElementById(id);
@@ -166,6 +169,117 @@
     return { ...b, pair, pips, distance, lossPerUnit, lots, units, loss, step, lotUnit, warn, empty, invalid, zeroBudget, quote, rate };
   };
 
+  // ---------- 現在値の取得 ----------
+  const LIVE_INTERVAL_MS = 60 * 1000;
+  const liveState = { pair: null, status: 'idle' }; // idle | loading | ok | daily | error | off
+  const isHttp = /^https?:$/.test(location.protocol);
+
+  const fetchJson = async (url, ms = 8000) => {
+    const c = new AbortController();
+    const t = setTimeout(() => c.abort(), ms);
+    try {
+      const r = await fetch(url, { cache: 'no-store', signal: c.signal });
+      if (!r.ok) throw new Error(`HTTP ${r.status}`);
+      return await r.json();
+    } finally { clearTimeout(t); }
+  };
+
+  // 取得元の優先順: 同一オリジンの /api/quote（Yahoo→日次） → ブラウザから日次レートAPIへ直接
+  const fetchQuoteRemote = async (pair) => {
+    const [base, quote] = pair.split('/');
+    if (isHttp) {
+      try {
+        const j = await fetchJson(`/api/quote?pair=${encodeURIComponent(pair)}`);
+        if (Number(j.price) > 0) return { price: Number(j.price), time: Number(j.time) || Date.now(), source: j.source || 'api', daily: !!j.daily };
+      } catch { /* 次へ */ }
+    }
+    try {
+      const j = await fetchJson(`https://open.er-api.com/v6/latest/${base}`);
+      const price = Number(j?.rates?.[quote]);
+      if (j?.result === 'success' && price > 0) return { price, time: (Number(j.time_last_update_unix) || 0) * 1000 || Date.now(), source: 'open.er-api.com', daily: true };
+    } catch { /* 次へ */ }
+    try {
+      const j = await fetchJson(`https://api.frankfurter.dev/v1/latest?base=${base}&symbols=${quote}`);
+      const price = Number(j?.rates?.[quote]);
+      if (price > 0) return { price, time: j.date ? Date.parse(`${j.date}T16:00:00+01:00`) : Date.now(), source: 'ECB', daily: true };
+    } catch { /* 諦める */ }
+    return null;
+  };
+
+  const inFlight = new Map();
+  const getQuote = (pair) => {
+    if (inFlight.has(pair)) return inFlight.get(pair);
+    const p = fetchQuoteRemote(pair).then((q) => {
+      if (q) { quotes[pair] = q; save(KEYS.quotes, quotes); }
+      return q;
+    }).finally(() => inFlight.delete(pair));
+    inFlight.set(pair, p);
+    return p;
+  };
+
+  // 現在値をエントリー／換算レートに反映（手入力済みなら触らない）
+  const applyQuoteToInputs = (pair, q) => {
+    if (!q || pair !== calc.pair) return;
+    if (calc.entryAuto || isBlank(calc.entry)) {
+      calc.entry = q.price.toFixed(priceDecimals(pair));
+      calc.entryAuto = true;
+      if (document.activeElement !== $('in-entry')) $('in-entry').value = calc.entry;
+    }
+  };
+  const applyRateToInputs = (quoteCcy, q) => {
+    if (!q || quoteCcy !== quoteOf(calc.pair)) return;
+    if (calc.rateAuto || !(num(rates[quoteCcy]) > 0)) {
+      rates[quoteCcy] = Math.round(q.price * 1000) / 1000;
+      calc.rateAuto = true;
+      save(KEYS.rates, rates);
+      if (document.activeElement !== $('in-rate')) $('in-rate').value = rates[quoteCcy];
+    }
+  };
+
+  const updateLive = async (pair = calc.pair) => {
+    if (!settings.liveQuote) { liveState.status = 'off'; renderLive(); return; }
+    liveState.pair = pair;
+    liveState.status = 'loading';
+    renderLive();
+    const quoteCcy = quoteOf(pair);
+    const [q, rq] = await Promise.all([
+      getQuote(pair),
+      quoteCcy === 'JPY' ? Promise.resolve(null) : getQuote(`${quoteCcy}/JPY`),
+    ]);
+    if (pair !== calc.pair) return; // 取得中にペアが変わった
+    if (q) {
+      applyQuoteToInputs(pair, q);
+      liveState.status = q.daily ? 'daily' : 'ok';
+    } else {
+      applyQuoteToInputs(pair, quotes[pair]); // 取得失敗時は最後に取れた値で埋める
+      liveState.status = 'error';
+    }
+    if (rq) applyRateToInputs(quoteCcy, rq);
+    save(KEYS.calc, calc);
+    renderCalc();
+  };
+
+  const renderLive = () => {
+    const pill = $('live-pill');
+    const q = quotes[calc.pair];
+    const status = !settings.liveQuote ? 'off'
+      : liveState.pair === calc.pair ? liveState.status
+      : q ? (q.daily ? 'daily' : 'ok') : 'idle';
+    pill.dataset.state = status;
+    const text = $('live-text');
+    const time = $('live-time');
+    if (status === 'off') { text.textContent = ''; time.textContent = ''; return; }
+    if (!q) {
+      text.textContent = status === 'loading' ? '現在値を取得中' : status === 'error' ? '現在値を取得できません' : '現在値';
+      time.textContent = status === 'error' ? '再試行' : '';
+      pill.title = '現在値を取得してエントリーに入れる';
+      return;
+    }
+    text.textContent = `${status === 'daily' ? '日次 ' : '現在値 '}${q.price.toFixed(priceDecimals(calc.pair))}`;
+    time.textContent = status === 'loading' ? '更新中' : status === 'error' ? '再試行' : fmtTime(new Date(q.time).toISOString());
+    pill.title = `${q.source}・${new Date(q.time).toLocaleString('ja-JP')}${q.daily ? '（日次レート）' : '（参考値・遅延あり）'}。タップでエントリーに入れる`;
+  };
+
   // ---------- 描画：計算画面 ----------
   const pct = (v) => (Number(v) || 0).toLocaleString('ja-JP', { minimumFractionDigits: 1, maximumFractionDigits: 2 }) + ' %';
 
@@ -251,6 +365,7 @@
     }
     copyBtn.disabled = !hasResult;
     $('btn-add-pos').disabled = !hasResult;
+    renderLive();
   };
 
   // ---------- 描画：保有・記録 ----------
@@ -345,6 +460,7 @@
     $('set-step').value = String(settings.step);
     $('set-copy').value = settings.copyTarget;
     $('sw-daily').checked = !!settings.dailyAdjust;
+    $('set-live').checked = !!settings.liveQuote;
   };
 
   const renderAll = () => { renderCalc(); renderPositions(); renderSettings(); };
@@ -373,8 +489,14 @@
 
   pairSel.addEventListener('change', () => {
     calc.pair = pairSel.value;
+    calc.entry = ''; calc.stop = ''; calc.pips = '';
+    $('in-stop').value = ''; $('in-pips').value = '';
+    calc.entryAuto = true;
+    calc.rateAuto = !(num(rates[quoteOf(calc.pair)]) > 0);
+    $('in-entry').value = '';
     $('in-rate').value = rates[quoteOf(calc.pair)] ?? '';
     persistCalc();
+    updateLive(calc.pair);
   });
   $('seg-mode').addEventListener('click', (ev) => {
     const b = ev.target.closest('button[data-mode]');
@@ -390,10 +512,20 @@
     calc.side = b.dataset.side;
     persistCalc();
   });
+  $('live-pill').addEventListener('click', () => {
+    const q = quotes[calc.pair];
+    if (q) {
+      calc.entryAuto = true;
+      calc.entry = q.price.toFixed(priceDecimals(calc.pair));
+      $('in-entry').value = calc.entry;
+      persistCalc();
+    }
+    updateLive(calc.pair);
+  });
   $('btn-go-settings').addEventListener('click', () => showScreen('settings'));
   $('account-pill').addEventListener('click', () => { showScreen('settings'); setTimeout(() => $('set-capital').focus(), 200); });
   $('row-risk').addEventListener('click', () => { showScreen('settings'); setTimeout(() => $('set-risk').focus(), 200); });
-  $('in-entry').addEventListener('input', (ev) => { calc.entry = ev.target.value; persistCalc(); });
+  $('in-entry').addEventListener('input', (ev) => { calc.entry = ev.target.value; calc.entryAuto = isBlank(calc.entry); persistCalc(); });
   $('in-stop').addEventListener('input', (ev) => { calc.stop = ev.target.value; persistCalc(); });
   $('in-pips').addEventListener('input', (ev) => { calc.pips = ev.target.value; persistCalc(); });
   $('in-rate').value = rates[quoteOf(calc.pair)] ?? '';
@@ -401,7 +533,9 @@
     const q = quoteOf(calc.pair);
     const v = num(ev.target.value);
     if (isFinite(v) && v > 0) rates[q] = v; else delete rates[q];
+    calc.rateAuto = !(v > 0);
     save(KEYS.rates, rates);
+    save(KEYS.calc, calc);
     renderCalc();
   });
   $('sw-daily').addEventListener('change', (ev) => {
@@ -567,13 +701,18 @@
   $('set-lot').addEventListener('change', (ev) => { settings.lotUnit = Number(ev.target.value); save(KEYS.settings, settings); renderCalc(); });
   $('set-step').addEventListener('change', (ev) => { settings.step = Number(ev.target.value); save(KEYS.settings, settings); renderCalc(); });
   $('set-copy').addEventListener('change', (ev) => { settings.copyTarget = ev.target.value; save(KEYS.settings, settings); });
+  $('set-live').addEventListener('change', (ev) => {
+    settings.liveQuote = ev.target.checked;
+    save(KEYS.settings, settings);
+    if (settings.liveQuote) updateLive(calc.pair); else renderCalc();
+  });
 
   $('btn-reset').addEventListener('click', () => {
     if (!confirm('設定・保有・記録をすべて削除します。よろしいですか？')) return;
     Object.values(KEYS).forEach((k) => { try { localStorage.removeItem(k); } catch {} });
     settings = { ...DEFAULT_SETTINGS };
     calc = { ...DEFAULT_CALC };
-    rates = {}; positions = []; log = [];
+    rates = {}; positions = []; log = []; quotes = {};
     pairSel.value = calc.pair;
     $('in-entry').value = ''; $('in-stop').value = ''; $('in-pips').value = ''; $('in-rate').value = '';
     renderAll();
@@ -589,4 +728,14 @@
 
   // ---------- 初期描画 ----------
   renderAll();
+  updateLive(calc.pair);
+  setInterval(() => {
+    if (document.visibilityState === 'visible' && settings.liveQuote && $('screen-calc').classList.contains('is-active')) updateLive(calc.pair);
+  }, LIVE_INTERVAL_MS);
+  document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState === 'visible' && settings.liveQuote) {
+      const q = quotes[calc.pair];
+      if (!q || Date.now() - q.time > LIVE_INTERVAL_MS) updateLive(calc.pair);
+    }
+  });
 })();

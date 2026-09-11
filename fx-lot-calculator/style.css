@@ -622,3 +622,37 @@ button { cursor: pointer; }
   .field-input { font-size: 22px; }
   .seg-side button { min-width: 54px; }
 }
+
+/* 現在値ピル */
+.field-meta { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-top: 10px; min-height: 28px; }
+.field-meta .field-helper { margin: 0; flex: 1 1 auto; min-width: 0; }
+.live-pill {
+  display: inline-flex; align-items: center; gap: 6px;
+  flex: 0 0 auto;
+  max-width: 60%;
+  min-height: 30px;
+  padding: 4px 10px 4px 8px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: var(--card);
+  color: var(--ink-2);
+  font-size: 13px;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+  transition: border-color .15s, color .15s, background .15s;
+}
+.live-pill .live-icon { width: 15px; height: 15px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; flex: 0 0 auto; }
+.live-pill .live-text { font-weight: 500; overflow: hidden; text-overflow: ellipsis; }
+.live-pill .live-time { color: var(--muted); font-size: 12px; }
+.live-pill[data-state="ok"] { border-color: var(--green-soft); background: var(--green-soft); color: var(--green-ink); }
+.live-pill[data-state="ok"] .live-time { color: var(--green-ink); opacity: .75; }
+.live-pill[data-state="daily"] { border-color: var(--line); background: var(--control); color: var(--ink-2); }
+.live-pill[data-state="loading"] { color: var(--muted); }
+.live-pill[data-state="loading"] .live-icon { animation: spin 1s linear infinite; }
+.live-pill[data-state="error"] { color: var(--red); border-color: var(--red-soft); background: var(--red-soft); }
+.live-pill[data-state="off"] { display: none; }
+.live-pill:active { filter: brightness(.96); }
+.live-pill:focus-visible { outline: 2px solid var(--green); outline-offset: 2px; }
+@keyframes spin { to { transform: rotate(360deg); } }
+@media (prefers-reduced-motion: reduce) { .live-pill[data-state="loading"] .live-icon { animation: none; } }
+@media (max-width: 359px) { .field-meta { flex-wrap: wrap; } .live-pill { max-width: 100%; } }
