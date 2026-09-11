@@ -12,7 +12,7 @@
   <meta property="og:type" content="website">
   <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='14' fill='%230F4D3A'/%3E%3Ctext x='32' y='42' text-anchor='middle' font-family='-apple-system,Helvetica,Arial,sans-serif' font-size='30' font-weight='700' fill='%23fff'%3Elot%3C/text%3E%3C/svg%3E">
   <title>FX Lot Calculator</title>
-  <link rel="stylesheet" href="style.css">
+  <link rel="stylesheet" href="style.css?v=20260911c">
 </head>
 <body>
   <main class="app">
@@ -73,7 +73,14 @@
             </div>
           </div>
         </div>
-        <p class="field-helper" id="calc-helper">損切り幅 — pips</p>
+        <div class="field-meta">
+          <p class="field-helper" id="calc-helper">損切り幅 — pips</p>
+          <button class="live" id="live-pill" type="button" data-state="idle" title="現在値をエントリーに入れる">
+            <svg class="live-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M20 12a8 8 0 0 1-14.2 5M4 12a8 8 0 0 1 14.2-5"/><path d="M18 3v4h-4M6 21v-4h4"/></svg>
+            <span class="live-text" id="live-text">現在値</span>
+            <span class="live-time" id="live-time"></span>
+          </button>
+        </div>
 
         <div class="calc-row" id="row-rate" hidden>
           <label class="calc-row-label" for="in-rate"><span id="rate-label">USD</span> → 円レート</label>
@@ -122,7 +129,7 @@
           <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg>
           <span>保有分に追加</span>
         </button>
-        <p class="calc-note">コスト・滑りは未反映。<span id="hint-step">0.01 lot</span> 刻みで切り捨て、1 lot = <span id="hint-lot">10,000</span> 通貨。</p>
+        <p class="calc-note">コスト・滑りは未反映。<span id="hint-step">0.01 lot</span> 刻みで切り捨て、1 lot = <span id="hint-lot">10,000 通貨</span>。</p>
       </div>
     </section>
 
@@ -146,6 +153,22 @@
           <div class="stat-k">残り日次枠</div>
           <div class="stat-v green" id="st-remaining">¥0</div>
         </div>
+      </div>
+
+      <div class="card pnl">
+        <div class="pnl-head">
+          <span class="pnl-title">損益の内訳</span>
+          <div class="segmented seg-period" id="seg-period" role="group" aria-label="集計期間">
+            <button type="button" data-period="today">今日</button>
+            <button type="button" data-period="month">今月</button>
+            <button type="button" data-period="all" class="is-active">全期間</button>
+          </div>
+        </div>
+        <div class="pnl-body">
+          <svg class="donut" id="pnl-donut" viewBox="0 0 120 120" role="img" aria-labelledby="pnl-donut-title"><title id="pnl-donut-title">損益の内訳</title></svg>
+          <div class="pnl-legend" id="pnl-legend"></div>
+        </div>
+        <div class="pnl-pairs" id="pnl-pairs"></div>
       </div>
 
       <div class="group-title">保有ポジション</div>
@@ -173,6 +196,20 @@
         <h1>設定</h1>
         <p class="sub">この端末に保存されます</p>
       </header>
+
+      <div class="group-title">アカウント</div>
+      <div class="card list">
+        <div class="row" id="acct-signed-in" hidden>
+          <div class="row-label acct-mail"><span id="acct-email"></span><span class="sync-dot" id="acct-sync" data-state="idle" title="同期状態"></span></div>
+          <button class="pill-btn" id="acct-sync-now" type="button">再同期</button>
+        </div>
+        <button class="row row-btn danger" id="acct-logout" type="button" hidden>ログアウト</button>
+        <div class="row" id="acct-signed-out">
+          <div class="row-label">ログインするとデータをクラウドに保存</div>
+          <button class="pill-btn" id="acct-login" type="button">ログイン</button>
+        </div>
+      </div>
+      <p class="hint" id="acct-unconfigured">ログイン機能は未設定です。Vercel の環境変数 SUPABASE_URL / SUPABASE_ANON_KEY を設定すると有効になります。</p>
 
       <div class="group-title">資金・リスク</div>
       <div class="card list">
@@ -211,6 +248,14 @@
           </select>
         </div>
         <div class="row">
+          <label class="row-label" for="set-gold">ゴールド 1 lot のオンス数</label>
+          <select class="row-input select" id="set-gold">
+            <option value="100" selected>100 oz</option>
+            <option value="10">10 oz</option>
+            <option value="1">1 oz</option>
+          </select>
+        </div>
+        <div class="row">
           <label class="row-label" for="set-step">注文刻み</label>
           <select class="row-input select" id="set-step">
             <option value="0.01">0.01 lot</option>
@@ -227,6 +272,18 @@
         </div>
       </div>
 
+      <div class="group-title">価格の取得</div>
+      <div class="card list">
+        <div class="row">
+          <div class="row-label">現在値を自動取得</div>
+          <label class="switch">
+            <input type="checkbox" id="set-live" checked>
+            <span class="switch-track"><span class="switch-thumb"></span></span>
+          </label>
+        </div>
+      </div>
+      <p class="hint">通貨ペアを選ぶと現在値（Yahoo Finance の参考値・遅延あり）をエントリーと換算レートに入れ、手入力するまで 60 秒ごとに追従します。取得できない場合は日次レートを使います。</p>
+
       <div class="group-title">データ</div>
       <div class="card list">
         <button class="row row-btn danger" id="btn-reset" type="button">保存データをすべて削除</button>
@@ -235,6 +292,81 @@
     </section>
 
   </main>
+
+  <!-- ログイン -->
+  <section class="auth" id="screen-auth" hidden>
+    <div class="auth-inner">
+      <header class="auth-head">
+        <div class="auth-mark" aria-hidden="true">lot</div>
+        <h1>FX Lot Calculator</h1>
+        <p>損切り幅と許容損失から発注ロットを即計算</p>
+      </header>
+
+      <div class="segmented seg-auth" id="seg-auth" role="tablist">
+        <button type="button" data-view="login" class="is-active" role="tab">ログイン</button>
+        <button type="button" data-view="signup" role="tab">新規登録</button>
+      </div>
+
+      <p class="auth-msg" id="auth-msg" hidden role="status"></p>
+
+      <form class="card auth-form" id="form-login" data-auth-view="login" novalidate>
+        <div class="field">
+          <label class="field-label" for="login-email">メールアドレス</label>
+          <input class="field-input" id="login-email" type="email" inputmode="email" autocomplete="email" placeholder="you@example.com" required>
+        </div>
+        <div class="field">
+          <label class="field-label" for="login-password">パスワード</label>
+          <input class="field-input" id="login-password" type="password" autocomplete="current-password" minlength="8" placeholder="8文字以上" required>
+        </div>
+        <label class="check">
+          <input type="checkbox" id="login-remember" checked>
+          <span class="check-box" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M5 12.5l4.5 4.5L19 7.5"/></svg></span>
+          <span>次回から自動でログイン</span>
+        </label>
+        <button class="btn btn-primary" id="login-submit" type="submit">ログイン</button>
+        <button class="link-btn auth-link" id="auth-forgot" type="button">パスワードを忘れた場合</button>
+      </form>
+
+      <form class="card auth-form" id="form-signup" data-auth-view="signup" hidden novalidate>
+        <div class="field">
+          <label class="field-label" for="signup-email">メールアドレス</label>
+          <input class="field-input" id="signup-email" type="email" inputmode="email" autocomplete="email" placeholder="you@example.com" required>
+        </div>
+        <div class="field">
+          <label class="field-label" for="signup-password">パスワード（8文字以上）</label>
+          <input class="field-input" id="signup-password" type="password" autocomplete="new-password" minlength="8" placeholder="8文字以上" required>
+        </div>
+        <label class="check">
+          <input type="checkbox" id="signup-newsletter">
+          <span class="check-box" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M5 12.5l4.5 4.5L19 7.5"/></svg></span>
+          <span>新機能やお知らせのメールを受け取る（任意・いつでも解除できます）</span>
+        </label>
+        <button class="btn btn-primary" id="signup-submit" type="submit">登録する</button>
+        <p class="auth-note">登録後に確認メールが届きます。メール内のリンクを開くと登録が完了します。</p>
+      </form>
+
+      <form class="card auth-form" id="form-forgot" data-auth-view="forgot" hidden novalidate>
+        <h2>パスワードの再設定</h2>
+        <div class="field">
+          <label class="field-label" for="forgot-email">登録したメールアドレス</label>
+          <input class="field-input" id="forgot-email" type="email" inputmode="email" autocomplete="email" placeholder="you@example.com" required>
+        </div>
+        <button class="btn btn-primary" id="forgot-submit" type="submit">再設定メールを送る</button>
+        <button class="link-btn auth-link" id="auth-back" type="button">ログインに戻る</button>
+      </form>
+
+      <form class="card auth-form" id="form-reset" data-auth-view="reset" hidden novalidate>
+        <h2>新しいパスワード</h2>
+        <div class="field">
+          <label class="field-label" for="reset-password">パスワード（8文字以上）</label>
+          <input class="field-input" id="reset-password" type="password" autocomplete="new-password" minlength="8" required>
+        </div>
+        <button class="btn btn-primary" id="reset-submit" type="submit">パスワードを更新</button>
+      </form>
+
+      <button class="link-btn auth-guest" id="auth-guest" type="button">ログインせずに使う（この端末にだけ保存）</button>
+    </div>
+  </section>
 
   <!-- 下部ナビ -->
   <nav class="tabbar">
@@ -278,6 +410,15 @@
           </div>
         </div>
       </div>
+      <div class="ocr" id="ocr-box" hidden>
+        <label class="ocr-pick" for="ocr-file">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="5" width="18" height="14" rx="3"/><circle cx="12" cy="12" r="3.5"/><path d="M8 5l1.2-2h5.6L16 5"/></svg>
+          <span>取引履歴のスクショから読み取る</span>
+        </label>
+        <input type="file" id="ocr-file" accept="image/*" hidden>
+        <p class="ocr-status" id="ocr-status" hidden></p>
+        <div class="ocr-results" id="ocr-results" hidden></div>
+      </div>
       <div class="sheet-actions">
         <button class="btn btn-secondary" id="sheet-cancel" type="button">キャンセル</button>
         <button class="btn btn-primary" id="sheet-ok" type="button">記録する</button>
@@ -287,6 +428,8 @@
 
   <div class="toast" id="toast" role="status" hidden></div>
 
-  <script src="app.js"></script>
+  <script src="config.js?v=20260911c"></script>
+  <script src="ocr.js?v=20260911c"></script>
+  <script src="app.js?v=20260911c"></script>
 </body>
 </html>

@@ -10,13 +10,19 @@
     'USD/JPY', 'EUR/JPY', 'GBP/JPY', 'AUD/JPY', 'NZD/JPY', 'CAD/JPY', 'CHF/JPY',
     'EUR/USD', 'GBP/USD', 'AUD/USD', 'NZD/USD', 'USD/CAD', 'USD/CHF',
     'EUR/GBP', 'EUR/AUD', 'GBP/AUD',
+    'XAU/USD',
   ];
+  // FX 以外の銘柄の契約仕様。未定義のペアは通貨ペア（1 lot = settings.lotUnit 通貨）
+  const INSTRUMENTS = {
+    'XAU/USD': { name: 'ゴールド', pipSize: 0.1, decimals: 2, unit: 'oz', contractKey: 'goldContract' },
+  };
   const KEYS = {
     settings: 'fxlot.settings.v1',
     calc: 'fxlot.calc.v1',
     rates: 'fxlot.rates.v1',
     positions: 'fxlot.positions.v1',
     log: 'fxlot.log.v1',
+    quotes: 'fxlot.quotes.v1',
   };
   const DEFAULT_SETTINGS = {
     capital: 1000000,
@@ -26,8 +32,10 @@
     step: 0.01,
     copyTarget: 'lots',
     dailyAdjust: true,
+    liveQuote: true,
+    goldContract: 100,
   };
-  const DEFAULT_CALC = { pair: 'USD/JPY', mode: 'price', side: 'buy', entry: '', stop: '', pips: '' };
+  const DEFAULT_CALC = { pair: 'USD/JPY', mode: 'price', side: 'buy', entry: '', stop: '', pips: '', entryAuto: true, rateAuto: true };
 
   // ---------- ストレージ ----------
   const load = (key, fallback) => {
@@ -40,6 +48,7 @@
   };
   const save = (key, value) => {
     try { localStorage.setItem(key, JSON.stringify(value)); } catch { /* private mode 等は無視 */ }
+    if (typeof cloudPush === 'function') cloudPush(key, value);
   };
 
   let settings = load(KEYS.settings, DEFAULT_SETTINGS);
@@ -47,6 +56,7 @@
   let rates = load(KEYS.rates, {});          // { USD: 150.2, GBP: 190.1 ... }
   let positions = load(KEYS.positions, []);  // 保有
   let log = load(KEYS.log, []);              // 決済記録
+  let quotes = load(KEYS.quotes, {});        // 現在値キャッシュ { 'USD/JPY': { price, time, source, daily } }
 
   // ---------- ユーティリティ ----------
   const $ = (id) => document.getElementById(id);
@@ -84,8 +94,16 @@
   };
   const uid = () => Date.now().toString(36) + Math.random().toString(36).slice(2, 7);
   const quoteOf = (pair) => pair.split('/')[1];
-  const pipSizeOf = (pair) => (quoteOf(pair) === 'JPY' ? 0.01 : 0.0001);
-  const priceDecimals = (pair) => (quoteOf(pair) === 'JPY' ? 3 : 5);
+  const specOf = (pair) => INSTRUMENTS[pair] || null;
+  const pipSizeOf = (pair) => specOf(pair)?.pipSize ?? (quoteOf(pair) === 'JPY' ? 0.01 : 0.0001);
+  const priceDecimals = (pair) => specOf(pair)?.decimals ?? (quoteOf(pair) === 'JPY' ? 3 : 5);
+  const contractOf = (pair) => (specOf(pair) ? (Number(settings[specOf(pair).contractKey]) || 100) : (Number(settings.lotUnit) || 10000));
+  const unitOf = (pair) => specOf(pair)?.unit || '通貨';
+  const placeholderFor = (pair, kind) => {
+    if (specOf(pair)) return kind === 'entry' ? '2400.00' : '2390.00';
+    if (quoteOf(pair) === 'JPY') return kind === 'entry' ? '150.000' : '149.700';
+    return kind === 'entry' ? '1.08500' : '1.08200';
+  };
 
   let toastTimer = null;
   const toast = (msg) => {
@@ -147,7 +165,7 @@
 
     const pips = distance / pipSize;
     const lossPerUnit = distance * rate; // 1通貨あたりの損失（円）
-    const lotUnit = Number(settings.lotUnit) || 10000;
+    const lotUnit = contractOf(pair);
     const step = Number(settings.step) || 0.01;
     const stepUnits = lotUnit * step;
 
@@ -163,7 +181,118 @@
         : `許容損失内では最小刻み ${step} lot に届きません`;
     }
     const zeroBudget = settings.dailyAdjust && b.adopted <= 0 && b.capital > 0;
-    return { ...b, pair, pips, distance, lossPerUnit, lots, units, loss, step, lotUnit, warn, empty, invalid, zeroBudget, quote, rate };
+    return { ...b, pair, pips, distance, lossPerUnit, lots, units, loss, step, lotUnit, unit: unitOf(pair), warn, empty, invalid, zeroBudget, quote, rate };
+  };
+
+  // ---------- 現在値の取得 ----------
+  const LIVE_INTERVAL_MS = 60 * 1000;
+  const liveState = { pair: null, status: 'idle' }; // idle | loading | ok | daily | error | off
+  const isHttp = /^https?:$/.test(location.protocol);
+
+  const fetchJson = async (url, ms = 8000) => {
+    const c = new AbortController();
+    const t = setTimeout(() => c.abort(), ms);
+    try {
+      const r = await fetch(url, { cache: 'no-store', signal: c.signal });
+      if (!r.ok) throw new Error(`HTTP ${r.status}`);
+      return await r.json();
+    } finally { clearTimeout(t); }
+  };
+
+  // 取得元の優先順: 同一オリジンの /api/quote（Yahoo→日次） → ブラウザから日次レートAPIへ直接
+  const fetchQuoteRemote = async (pair) => {
+    const [base, quote] = pair.split('/');
+    if (isHttp) {
+      try {
+        const j = await fetchJson(`/api/quote?pair=${encodeURIComponent(pair)}`);
+        if (Number(j.price) > 0) return { price: Number(j.price), time: Number(j.time) || Date.now(), source: j.source || 'api', daily: !!j.daily };
+      } catch { /* 次へ */ }
+    }
+    try {
+      const j = await fetchJson(`https://open.er-api.com/v6/latest/${base}`);
+      const price = Number(j?.rates?.[quote]);
+      if (j?.result === 'success' && price > 0) return { price, time: (Number(j.time_last_update_unix) || 0) * 1000 || Date.now(), source: 'open.er-api.com', daily: true };
+    } catch { /* 次へ */ }
+    try {
+      const j = await fetchJson(`https://api.frankfurter.dev/v1/latest?base=${base}&symbols=${quote}`);
+      const price = Number(j?.rates?.[quote]);
+      if (price > 0) return { price, time: j.date ? Date.parse(`${j.date}T16:00:00+01:00`) : Date.now(), source: 'ECB', daily: true };
+    } catch { /* 諦める */ }
+    return null;
+  };
+
+  const inFlight = new Map();
+  const getQuote = (pair) => {
+    if (inFlight.has(pair)) return inFlight.get(pair);
+    const p = fetchQuoteRemote(pair).then((q) => {
+      if (q) { quotes[pair] = q; save(KEYS.quotes, quotes); }
+      return q;
+    }).finally(() => inFlight.delete(pair));
+    inFlight.set(pair, p);
+    return p;
+  };
+
+  // 現在値をエントリー／換算レートに反映（手入力済みなら触らない）
+  const applyQuoteToInputs = (pair, q) => {
+    if (!q || pair !== calc.pair) return;
+    if (calc.entryAuto || isBlank(calc.entry)) {
+      calc.entry = q.price.toFixed(priceDecimals(pair));
+      calc.entryAuto = true;
+      if (document.activeElement !== $('in-entry')) $('in-entry').value = calc.entry;
+    }
+  };
+  const applyRateToInputs = (quoteCcy, q) => {
+    if (!q || quoteCcy !== quoteOf(calc.pair)) return;
+    if (calc.rateAuto || !(num(rates[quoteCcy]) > 0)) {
+      rates[quoteCcy] = Math.round(q.price * 1000) / 1000;
+      calc.rateAuto = true;
+      save(KEYS.rates, rates);
+      if (document.activeElement !== $('in-rate')) $('in-rate').value = rates[quoteCcy];
+    }
+  };
+
+  const updateLive = async (pair = calc.pair) => {
+    if (!settings.liveQuote) { liveState.status = 'off'; renderLive(); return; }
+    liveState.pair = pair;
+    liveState.status = 'loading';
+    renderLive();
+    const quoteCcy = quoteOf(pair);
+    const [q, rq] = await Promise.all([
+      getQuote(pair),
+      quoteCcy === 'JPY' ? Promise.resolve(null) : getQuote(`${quoteCcy}/JPY`),
+    ]);
+    if (pair !== calc.pair) return; // 取得中にペアが変わった
+    if (q) {
+      applyQuoteToInputs(pair, q);
+      liveState.status = q.daily ? 'daily' : 'ok';
+    } else {
+      applyQuoteToInputs(pair, quotes[pair]); // 取得失敗時は最後に取れた値で埋める
+      liveState.status = 'error';
+    }
+    if (rq) applyRateToInputs(quoteCcy, rq);
+    save(KEYS.calc, calc);
+    renderCalc();
+  };
+
+  const renderLive = () => {
+    const pill = $('live-pill');
+    const q = quotes[calc.pair];
+    const status = !settings.liveQuote ? 'off'
+      : liveState.pair === calc.pair ? liveState.status
+      : q ? (q.daily ? 'daily' : 'ok') : 'idle';
+    pill.dataset.state = status;
+    const text = $('live-text');
+    const time = $('live-time');
+    if (status === 'off') { text.textContent = ''; time.textContent = ''; return; }
+    if (!q) {
+      text.textContent = status === 'loading' ? '取得中' : status === 'error' ? '取得できません' : '現在値';
+      time.textContent = status === 'error' ? '再試行' : '';
+      pill.title = '現在値を取得してエントリーに入れる';
+      return;
+    }
+    text.textContent = `${status === 'daily' ? '日次 ' : ''}${q.price.toFixed(priceDecimals(calc.pair))}`;
+    time.textContent = status === 'loading' ? '更新中' : status === 'error' ? '再試行' : fmtTime(new Date(q.time).toISOString());
+    pill.title = `${q.source}・${new Date(q.time).toLocaleString('ja-JP')}${q.daily ? '（日次レート）' : '（参考値・遅延あり）'}。タップでエントリーに入れる`;
   };
 
   // ---------- 描画：計算画面 ----------
@@ -185,9 +314,9 @@
     lotsEl.classList.toggle('is-xlong', lotsText.length > 8);
     const unitsLine = $('res-units-line');
     unitsLine.classList.toggle('is-empty', !hasResult);
-    if (hasResult) unitsLine.innerHTML = `<strong id="res-units">${fmtInt(r.units)}</strong> 通貨`;
+    if (hasResult) unitsLine.innerHTML = `<strong id="res-units">${fmtInt(r.units)}</strong> ${r.unit}`;
     else if (r.empty) unitsLine.textContent = '価格を入力すると計算します';
-    else unitsLine.innerHTML = `<strong id="res-units">0</strong> 通貨`;
+    else unitsLine.innerHTML = `<strong id="res-units">0</strong> ${r.unit}`;
 
     const chip = $('res-chip');
     if (hasResult) {
@@ -221,14 +350,14 @@
     helper.classList.toggle('is-error', fieldError);
     if (fieldError) helper.textContent = r.warn;
     else if (isFinite(r.pips) && r.pips > 0) helper.textContent = `損切り幅 ${(Math.round(r.pips * 10) / 10).toLocaleString('ja-JP', { minimumFractionDigits: 1 })} pips`;
-    else helper.textContent = r.quote === 'JPY' ? '損切り幅 — pips（1 pip = 0.01）' : '損切り幅 — pips（1 pip = 0.0001）';
+    else helper.textContent = `損切り幅 — pips（1 pip = ${pipSizeOf(r.pair)}）`;
     $('field-entry').querySelector('label').textContent = calc.mode === 'pips' ? 'エントリー（任意）' : 'エントリー';
 
     const rowRate = $('row-rate');
     rowRate.hidden = r.quote === 'JPY';
     $('rate-label').textContent = r.quote;
-    $('in-entry').placeholder = r.quote === 'JPY' ? '150.000' : '1.08500';
-    $('in-stop').placeholder = r.quote === 'JPY' ? '149.700' : '1.08200';
+    $('in-entry').placeholder = placeholderFor(r.pair, 'entry');
+    $('in-stop').placeholder = placeholderFor(r.pair, 'stop');
 
     // 許容損失・残り枠
     $('bd-risk-pct').textContent = pct(settings.riskPct);
@@ -240,17 +369,75 @@
     $('bd-adopted').textContent = yen(r.adopted);
     $('budget').classList.toggle('is-zero', r.capital > 0 && r.remaining <= 0);
     $('hint-step').textContent = `${r.step} lot`;
-    $('hint-lot').textContent = fmtInt(r.lotUnit);
+    $('hint-lot').textContent = `${fmtInt(r.lotUnit)} ${r.unit}`;
 
     // 主操作
     const copyBtn = $('btn-copy');
     if (!copyBtn.classList.contains('is-done')) {
       $('btn-copy-label').textContent = hasResult
-        ? (settings.copyTarget === 'units' ? `${fmtInt(r.units)} 通貨をコピー` : `${fmtLots(r.lots, r.step)} lot をコピー`)
+        ? (settings.copyTarget === 'units' ? `${fmtInt(r.units)} ${r.unit}をコピー` : `${fmtLots(r.lots, r.step)} lot をコピー`)
         : '数量をコピー';
     }
     copyBtn.disabled = !hasResult;
     $('btn-add-pos').disabled = !hasResult;
+    renderLive();
+  };
+
+  // ---------- 損益の内訳（ドーナツ＋通貨ペア別） ----------
+  let pnlPeriod = 'all'; // today | month | all
+  const inPeriod = (e) => {
+    if (pnlPeriod === 'all') return true;
+    const tk = todayKey();
+    return pnlPeriod === 'today' ? e.day === tk : e.day.slice(0, 7) === tk.slice(0, 7);
+  };
+  const renderPnl = () => {
+    const entries = log.filter(inPeriod);
+    const wins = entries.filter((e) => Number(e.pnl) > 0);
+    const losses = entries.filter((e) => Number(e.pnl) < 0);
+    const profit = wins.reduce((s, e) => s + Number(e.pnl), 0);
+    const loss = -losses.reduce((s, e) => s + Number(e.pnl), 0);
+    const gross = profit + loss;
+    const net = profit - loss;
+    const winRate = entries.length ? Math.round((wins.length / entries.length) * 100) : null;
+
+    document.querySelectorAll('#seg-period button').forEach((b) => b.classList.toggle('is-active', b.dataset.period === pnlPeriod));
+
+    // ドーナツ: 2つの弧（利益・損失）を 2px の隙間で分ける
+    const svg = $('pnl-donut');
+    const R = 46, C = 2 * Math.PI * R, GAP = 3;
+    let arcs = '';
+    if (gross > 0) {
+      const pLen = (profit / gross) * C;
+      const lLen = (loss / gross) * C;
+      const seg = (len, offset, cls) => {
+        const g = len >= C - 0.01 || len <= 0.01 ? 0 : GAP;
+        const visible = Math.max(0, len - g);
+        if (visible <= 0) return '';
+        return `<circle class="${cls}" cx="60" cy="60" r="${R}" fill="none" stroke-width="12" stroke-linecap="butt" stroke-dasharray="${visible.toFixed(2)} ${(C - visible).toFixed(2)}" stroke-dashoffset="${(-offset - g / 2).toFixed(2)}" transform="rotate(-90 60 60)"/>`;
+      };
+      arcs = seg(pLen, 0, 'donut-profit') + seg(lLen, pLen, 'donut-loss');
+    }
+    svg.innerHTML = `<title id="pnl-donut-title">損益の内訳: 利益 ${yen(profit)}、損失 ${yen(loss)}</title>
+      <circle class="donut-track" cx="60" cy="60" r="${R}" fill="none" stroke-width="12"/>${arcs}
+      <text class="donut-net ${net < 0 ? 'neg' : net > 0 ? 'pos' : ''}" x="60" y="58" text-anchor="middle">${entries.length ? yen(net, { sign: true }) : '¥0'}</text>
+      <text class="donut-sub" x="60" y="74" text-anchor="middle">${entries.length ? `${entries.length}件・勝率 ${winRate}%` : '記録なし'}</text>`;
+
+    $('pnl-legend').innerHTML = `
+      <div class="legend-row"><span class="swatch profit"></span><span class="k">利益</span><span class="v pos">${yen(profit, { sign: true })}</span><span class="n">${wins.length}件</span></div>
+      <div class="legend-row"><span class="swatch loss"></span><span class="k">損失</span><span class="v neg">${loss ? yen(-loss) : '¥0'}</span><span class="n">${losses.length}件</span></div>`;
+
+    // 通貨ペア別（純損益の大きい順、6件まで、残りは「その他」）
+    const byPair = {};
+    entries.forEach((e) => { const k = e.pair || '—'; byPair[k] = (byPair[k] || 0) + Number(e.pnl || 0); });
+    let rows = Object.entries(byPair).sort((a, b) => Math.abs(b[1]) - Math.abs(a[1]));
+    if (rows.length > 6) { const rest = rows.slice(6).reduce((s, r) => s + r[1], 0); rows = rows.slice(0, 6); rows.push(['その他', rest]); }
+    const maxAbs = Math.max(1, ...rows.map((r) => Math.abs(r[1])));
+    $('pnl-pairs').innerHTML = rows.length ? rows.map(([pair, v]) => `
+      <div class="pair-row">
+        <span class="pair-name">${pair}</span>
+        <span class="pair-bar"><span class="pair-fill ${v < 0 ? 'loss' : 'profit'}" style="width:${Math.max(2, Math.round((Math.abs(v) / maxAbs) * 100))}%"></span></span>
+        <span class="pair-val ${v < 0 ? 'neg' : v > 0 ? 'pos' : ''}">${yen(v, { sign: true })}</span>
+      </div>`).join('') : '';
   };
 
   // ---------- 描画：保有・記録 ----------
@@ -270,6 +457,7 @@
     const badge = $('tab-badge');
     badge.hidden = positions.length === 0;
     badge.textContent = positions.length;
+    renderPnl();
 
     // 保有
     const posList = $('pos-list');
@@ -283,7 +471,7 @@
         el.innerHTML = `
           <div class="item-main">
             <div class="item-title"><span>${p.pair}</span><span class="lots">${fmtLots(p.lots, p.step)} lot</span>${p.side ? `<span class="side ${p.side}">${p.side === 'sell' ? '売り' : '買い'}</span>` : ''}</div>
-            <div class="item-sub">${fmtInt(p.units)} 通貨 ・ ${p.entry != null ? p.entry + ' → ' + p.stop : (Math.round(p.pips * 10) / 10) + ' pips'} ・ 想定損失 ${yen(p.expectedLoss)}</div>
+            <div class="item-sub">${fmtInt(p.units)} ${p.unit || '通貨'} ・ ${p.entry != null ? p.entry + ' → ' + p.stop : (Math.round(p.pips * 10) / 10) + ' pips'} ・ 想定損失 ${yen(p.expectedLoss)}</div>
           </div>
           <button class="pill-btn" type="button" data-close="${p.id}">決済</button>
           <button class="icon-btn" type="button" data-del-pos="${p.id}" aria-label="削除">${svgTrash}</button>`;
@@ -329,7 +517,7 @@
     el.innerHTML = `
       <div class="item-main">
         <div class="item-title"><span>${e.pair}</span>${e.lots != null ? `<span class="lots">${fmtLots(e.lots, e.step || 0.01)} lot</span>` : ''}</div>
-        <div class="item-sub">${fmtTime(e.at)}${e.manual ? ' ・ 手入力' : ''}</div>
+        <div class="item-sub">${fmtTime(e.at)}${e.ocr ? ' ・ スクショ' : e.manual ? ' ・ 手入力' : ''}</div>
       </div>
       <div class="item-amt ${pnl < 0 ? 'neg' : pnl > 0 ? 'pos' : 'muted'}">${yen(pnl, { sign: true })}</div>
       <button class="icon-btn" type="button" data-del-log="${e.id}" aria-label="削除">${svgTrash}</button>`;
@@ -342,9 +530,11 @@
     $('set-risk').value = settings.riskPct ?? '';
     $('set-daily').value = settings.dailyPct ?? '';
     $('set-lot').value = String(settings.lotUnit);
+    $('set-gold').value = String(settings.goldContract);
     $('set-step').value = String(settings.step);
     $('set-copy').value = settings.copyTarget;
     $('sw-daily').checked = !!settings.dailyAdjust;
+    $('set-live').checked = !!settings.liveQuote;
   };
 
   const renderAll = () => { renderCalc(); renderPositions(); renderSettings(); };
@@ -373,8 +563,14 @@
 
   pairSel.addEventListener('change', () => {
     calc.pair = pairSel.value;
+    calc.entry = ''; calc.stop = ''; calc.pips = '';
+    $('in-stop').value = ''; $('in-pips').value = '';
+    calc.entryAuto = true;
+    calc.rateAuto = !(num(rates[quoteOf(calc.pair)]) > 0);
+    $('in-entry').value = '';
     $('in-rate').value = rates[quoteOf(calc.pair)] ?? '';
     persistCalc();
+    updateLive(calc.pair);
   });
   $('seg-mode').addEventListener('click', (ev) => {
     const b = ev.target.closest('button[data-mode]');
@@ -390,10 +586,20 @@
     calc.side = b.dataset.side;
     persistCalc();
   });
+  $('live-pill').addEventListener('click', () => {
+    const q = quotes[calc.pair];
+    if (q) {
+      calc.entryAuto = true;
+      calc.entry = q.price.toFixed(priceDecimals(calc.pair));
+      $('in-entry').value = calc.entry;
+      persistCalc();
+    }
+    updateLive(calc.pair);
+  });
   $('btn-go-settings').addEventListener('click', () => showScreen('settings'));
   $('account-pill').addEventListener('click', () => { showScreen('settings'); setTimeout(() => $('set-capital').focus(), 200); });
   $('row-risk').addEventListener('click', () => { showScreen('settings'); setTimeout(() => $('set-risk').focus(), 200); });
-  $('in-entry').addEventListener('input', (ev) => { calc.entry = ev.target.value; persistCalc(); });
+  $('in-entry').addEventListener('input', (ev) => { calc.entry = ev.target.value; calc.entryAuto = isBlank(calc.entry); persistCalc(); });
   $('in-stop').addEventListener('input', (ev) => { calc.stop = ev.target.value; persistCalc(); });
   $('in-pips').addEventListener('input', (ev) => { calc.pips = ev.target.value; persistCalc(); });
   $('in-rate').value = rates[quoteOf(calc.pair)] ?? '';
@@ -401,7 +607,9 @@
     const q = quoteOf(calc.pair);
     const v = num(ev.target.value);
     if (isFinite(v) && v > 0) rates[q] = v; else delete rates[q];
+    calc.rateAuto = !(v > 0);
     save(KEYS.rates, rates);
+    save(KEYS.calc, calc);
     renderCalc();
   });
   $('sw-daily').addEventListener('change', (ev) => {
@@ -452,6 +660,7 @@
       side: calc.side,
       lots: r.lots,
       units: r.units,
+      unit: r.unit,
       step: r.step,
       entry: calc.mode === 'price' ? num(calc.entry).toFixed(dec) : null,
       stop: calc.mode === 'price' ? num(calc.stop).toFixed(dec) : null,
@@ -477,14 +686,16 @@
     if (ctx.type === 'close') {
       const p = ctx.position;
       $('sheet-title').textContent = '決済を記録';
-      $('sheet-sub').textContent = `${p.pair} ${fmtLots(p.lots, p.step)} lot（${fmtInt(p.units)} 通貨）・想定損失 ${yen(p.expectedLoss)}`;
+      $('sheet-sub').textContent = `${p.pair} ${fmtLots(p.lots, p.step)} lot（${fmtInt(p.units)} ${p.unit || '通貨'}）・想定損失 ${yen(p.expectedLoss)}`;
       $('sheet-row-pair').hidden = true;
     } else {
-      $('sheet-title').textContent = '記録を手入力';
-      $('sheet-sub').textContent = '保有に入れていない取引の確定損益を追加します';
+      $('sheet-title').textContent = '記録を追加';
+      $('sheet-sub').textContent = '手入力するか、取引履歴のスクショから読み取ります';
       $('sheet-row-pair').hidden = false;
       sheetPairSel.value = calc.pair;
     }
+    $('ocr-box').hidden = ctx.type !== 'manual';
+    resetOcr();
     $('toast').hidden = true;
     $('sheet').hidden = false;
     setTimeout(() => $('sheet-pnl').focus(), 50);
@@ -524,7 +735,73 @@
   });
   $('sheet-pnl').addEventListener('keydown', (ev) => { if (ev.key === 'Enter') $('sheet-ok').click(); });
 
+  // --- スクショ OCR ---
+  const resetOcr = () => {
+    $('ocr-file').value = '';
+    $('ocr-status').hidden = true;
+    $('ocr-results').hidden = true;
+    $('ocr-results').innerHTML = '';
+  };
+  const pairOptions = (selected) => PAIRS.map((p) => `<option value="${p}"${p === selected ? ' selected' : ''}>${p}</option>`).join('');
+  $('ocr-file').addEventListener('change', async (ev) => {
+    const file = ev.target.files?.[0];
+    if (!file) return;
+    const status = $('ocr-status');
+    status.hidden = false;
+    status.textContent = '読み取りの準備中…（初回は辞書の取得に時間がかかります）';
+    try {
+      const { items, text } = await window.FxOcr.recognize(file, (m) => {
+        const label = m.status === 'recognizing text' ? '読み取り中' : m.status === 'loading language traineddata' ? '辞書を取得中' : '準備中';
+        status.textContent = `${label} ${Math.round((m.progress || 0) * 100)}%`;
+      });
+      if (!items.length) {
+        status.textContent = '損益らしい数字が見つかりませんでした。損益の列が写るように切り取ってもう一度試してください。';
+        console.debug('[ocr text]', text);
+        return;
+      }
+      status.textContent = `${items.length} 件の候補を見つけました。内容を確認して記録してください。`;
+      const box = $('ocr-results');
+      box.hidden = false;
+      box.innerHTML = items.map((it, i) => `
+        <label class="ocr-row">
+          <input type="checkbox" class="ocr-check" data-i="${i}" checked>
+          <select class="ocr-pair" data-i="${i}" aria-label="通貨ペア">${pairOptions(it.pair || calc.pair)}</select>
+          <input class="ocr-pnl" data-i="${i}" type="text" inputmode="numeric" value="${it.pnl}" aria-label="損益">
+        </label>`).join('') + `<button class="btn btn-primary ocr-add" id="ocr-add" type="button">選択した ${items.length} 件を記録</button>`;
+      box.querySelectorAll('.ocr-check').forEach((c) => c.addEventListener('change', () => {
+        const n = box.querySelectorAll('.ocr-check:checked').length;
+        $('ocr-add').textContent = `選択した ${n} 件を記録`;
+        $('ocr-add').disabled = n === 0;
+      }));
+      $('ocr-add').addEventListener('click', () => {
+        const now = new Date();
+        let added = 0;
+        box.querySelectorAll('.ocr-check:checked').forEach((c) => {
+          const i = c.dataset.i;
+          const pnl = num(box.querySelector(`.ocr-pnl[data-i="${i}"]`).value);
+          if (!isFinite(pnl)) return;
+          log.push({ id: uid(), day: todayKey(now), at: new Date(now.getTime() + added).toISOString(), pnl, pair: box.querySelector(`.ocr-pair[data-i="${i}"]`).value, manual: true, ocr: true });
+          added++;
+        });
+        if (!added) return;
+        save(KEYS.log, log);
+        closeSheet();
+        renderCalc();
+        renderPositions();
+        toast(`${added} 件を記録しました`);
+      });
+    } catch (e) {
+      status.textContent = `読み取れませんでした: ${e?.message || e}`;
+    }
+  });
+
   $('btn-manual-log').addEventListener('click', () => openSheet({ type: 'manual' }));
+  $('seg-period').addEventListener('click', (ev) => {
+    const b = ev.target.closest('button[data-period]');
+    if (!b) return;
+    pnlPeriod = b.dataset.period;
+    renderPnl();
+  });
 
   $('screen-pos').addEventListener('click', (ev) => {
     const closeBtn = ev.target.closest('[data-close]');
@@ -565,15 +842,21 @@
   bindSetting('set-risk', 'riskPct', (v) => Math.max(0, num(v) || 0));
   bindSetting('set-daily', 'dailyPct', (v) => Math.max(0, num(v) || 0));
   $('set-lot').addEventListener('change', (ev) => { settings.lotUnit = Number(ev.target.value); save(KEYS.settings, settings); renderCalc(); });
+  $('set-gold').addEventListener('change', (ev) => { settings.goldContract = Number(ev.target.value); save(KEYS.settings, settings); renderCalc(); });
   $('set-step').addEventListener('change', (ev) => { settings.step = Number(ev.target.value); save(KEYS.settings, settings); renderCalc(); });
   $('set-copy').addEventListener('change', (ev) => { settings.copyTarget = ev.target.value; save(KEYS.settings, settings); });
+  $('set-live').addEventListener('change', (ev) => {
+    settings.liveQuote = ev.target.checked;
+    save(KEYS.settings, settings);
+    if (settings.liveQuote) updateLive(calc.pair); else renderCalc();
+  });
 
   $('btn-reset').addEventListener('click', () => {
     if (!confirm('設定・保有・記録をすべて削除します。よろしいですか？')) return;
     Object.values(KEYS).forEach((k) => { try { localStorage.removeItem(k); } catch {} });
     settings = { ...DEFAULT_SETTINGS };
     calc = { ...DEFAULT_CALC };
-    rates = {}; positions = []; log = [];
+    rates = {}; positions = []; log = []; quotes = {};
     pairSel.value = calc.pair;
     $('in-entry').value = ''; $('in-stop').value = ''; $('in-pips').value = ''; $('in-rate').value = '';
     renderAll();
@@ -587,6 +870,255 @@
     if (now !== lastDay) { lastDay = now; renderCalc(); renderPositions(); }
   }, 60 * 1000);
 
+
+  // ==========================================================
+  // ログイン（Supabase）とクラウド同期
+  //   - 設定ファイル config.js の FXLOT_CONFIG、なければ /api/config から URL と anon key を受け取る
+  //   - 未設定なら従来どおり端末内保存のみで動く
+  // ==========================================================
+  const SUPABASE_SRC = 'https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.45.4/dist/umd/supabase.min.js';
+  const REMEMBER_KEY = 'fxlot.remember';
+  const GUEST_KEY = 'fxlot.guest';
+  const SYNC_KEYS = { settings: KEYS.settings, positions: KEYS.positions, log: KEYS.log, rates: KEYS.rates };
+  const AUTH = { client: null, user: null, configured: false, pulling: false };
+
+  const loadScript = (src) => new Promise((resolve, reject) => {
+    const el = document.createElement('script');
+    el.src = src; el.onload = resolve; el.onerror = () => reject(new Error('スクリプトを読み込めません'));
+    document.head.appendChild(el);
+  });
+  const getConfig = async () => {
+    const c = window.FXLOT_CONFIG;
+    if (c?.supabaseUrl && c?.supabaseAnonKey) return c;
+    if (!isHttp) return null;
+    try { return await fetchJson('/api/config', 5000); } catch { return null; }
+  };
+  const makeClient = (cfg, storage) => window.supabase.createClient(cfg.supabaseUrl, cfg.supabaseAnonKey, {
+    auth: { persistSession: true, autoRefreshToken: true, detectSessionInUrl: true, storage, flowType: 'implicit' },
+  });
+
+  // --- 同期 ---
+  const pushTimers = {};
+  const keyName = (storageKey) => Object.keys(SYNC_KEYS).find((k) => SYNC_KEYS[k] === storageKey);
+  function cloudPush(storageKey, value) {
+    const name = keyName(storageKey);
+    if (!name || !AUTH.client || !AUTH.user || AUTH.pulling) return;
+    clearTimeout(pushTimers[name]);
+    pushTimers[name] = setTimeout(async () => {
+      try {
+        await AUTH.client.from('user_state').upsert({ user_id: AUTH.user.id, key: name, value, updated_at: new Date().toISOString() });
+        setSyncState('ok');
+      } catch (e) { setSyncState('error'); }
+    }, 800);
+  }
+  const pullAll = async () => {
+    if (!AUTH.client || !AUTH.user) return;
+    AUTH.pulling = true;
+    try {
+      const { data, error } = await AUTH.client.from('user_state').select('key,value').eq('user_id', AUTH.user.id);
+      if (error) throw error;
+      const remote = Object.fromEntries((data || []).map((r) => [r.key, r.value]));
+      if (remote.settings) settings = { ...DEFAULT_SETTINGS, ...remote.settings };
+      if (Array.isArray(remote.positions)) positions = remote.positions;
+      if (Array.isArray(remote.log)) log = remote.log;
+      if (remote.rates && typeof remote.rates === 'object') rates = remote.rates;
+      save(KEYS.settings, settings); save(KEYS.positions, positions); save(KEYS.log, log); save(KEYS.rates, rates);
+      AUTH.pulling = false;
+      // クラウドにまだ無いものは端末の内容を送る
+      for (const name of Object.keys(SYNC_KEYS)) {
+        if (!(name in remote)) cloudPush(SYNC_KEYS[name], { settings, positions, log, rates }[name]);
+      }
+      setSyncState('ok');
+      renderAll();
+    } catch (e) {
+      setSyncState('error');
+    } finally { AUTH.pulling = false; }
+  };
+  const setSyncState = (state) => { const el = $('acct-sync'); if (el) el.dataset.state = state; };
+
+  // --- 画面 ---
+  const authMsg = (text, tone = 'info') => {
+    const el = $('auth-msg');
+    el.hidden = !text;
+    el.textContent = text || '';
+    el.dataset.tone = tone;
+  };
+  const showAuthView = (view) => {
+    document.querySelectorAll('[data-auth-view]').forEach((el) => { el.hidden = el.dataset.authView !== view; });
+    document.querySelectorAll('#seg-auth button').forEach((b) => b.classList.toggle('is-active', b.dataset.view === view));
+    $('seg-auth').hidden = !(view === 'login' || view === 'signup');
+    authMsg('');
+  };
+  const showAuth = (view = 'login') => {
+    $('screen-auth').hidden = false;
+    document.body.classList.add('auth-open');
+    showAuthView(view);
+  };
+  const hideAuth = () => {
+    $('screen-auth').hidden = true;
+    document.body.classList.remove('auth-open');
+  };
+  const renderAccount = () => {
+    const signedIn = !!AUTH.user;
+    $('acct-signed-in').hidden = !signedIn;
+    $('acct-logout').hidden = !signedIn;
+    $('acct-signed-out').hidden = signedIn;
+    $('acct-unconfigured').hidden = AUTH.configured;
+    if (signedIn) $('acct-email').textContent = AUTH.user.email || '';
+  };
+  const onSignedIn = async (user) => {
+    AUTH.user = user;
+    localStorage.removeItem(GUEST_KEY);
+    hideAuth();
+    renderAccount();
+    await pullAll();
+  };
+  const onSignedOut = () => {
+    AUTH.user = null;
+    renderAccount();
+    if (AUTH.configured && !localStorage.getItem(GUEST_KEY)) showAuth('login');
+  };
+
+  const validEmail = (v) => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(String(v).trim());
+  const busy = (btn, on) => { btn.disabled = on; btn.classList.toggle('is-busy', on); };
+
+  const initAuth = async () => {
+    const cfg = await getConfig();
+    if (!cfg?.supabaseUrl || !cfg?.supabaseAnonKey) { AUTH.configured = false; renderAccount(); return; }
+    try { if (!window.supabase) await loadScript(SUPABASE_SRC); } catch { AUTH.configured = false; renderAccount(); return; }
+    AUTH.configured = true;
+    AUTH.cfg = cfg;
+    // 保存済みセッション: 自動ログイン（localStorage）→ このタブだけ（sessionStorage）の順に探す
+    let client = makeClient(cfg, localStorage);
+    let { data: { session } } = await client.auth.getSession();
+    if (!session) {
+      const c2 = makeClient(cfg, sessionStorage);
+      const r2 = await c2.auth.getSession();
+      if (r2.data.session) { client = c2; session = r2.data.session; }
+    }
+    AUTH.client = client;
+    client.auth.onAuthStateChange((event, sess) => {
+      if (event === 'PASSWORD_RECOVERY') { showAuth('reset'); return; }
+      if (event === 'SIGNED_OUT') { onSignedOut(); return; }
+      if (sess?.user && (!AUTH.user || AUTH.user.id !== sess.user.id)) onSignedIn(sess.user);
+    });
+    renderAccount();
+    if (session?.user) await onSignedIn(session.user);
+    else if (!localStorage.getItem(GUEST_KEY)) showAuth('login');
+  };
+
+  // 表示切替
+  $('seg-auth').addEventListener('click', (ev) => { const b = ev.target.closest('button[data-view]'); if (b) showAuthView(b.dataset.view); });
+  $('auth-forgot').addEventListener('click', () => showAuthView('forgot'));
+  $('auth-back').addEventListener('click', () => showAuthView('login'));
+  $('auth-guest').addEventListener('click', () => { localStorage.setItem(GUEST_KEY, '1'); hideAuth(); renderAccount(); });
+
+  // ログイン
+  $('form-login').addEventListener('submit', async (ev) => {
+    ev.preventDefault();
+    const email = $('login-email').value.trim();
+    const password = $('login-password').value;
+    if (!validEmail(email)) { authMsg('メールアドレスの形式を確認してください', 'error'); return; }
+    if (password.length < 8) { authMsg('パスワードは8文字以上です', 'error'); return; }
+    const remember = $('login-remember').checked;
+    localStorage.setItem(REMEMBER_KEY, remember ? '1' : '0');
+    const btn = $('login-submit'); busy(btn, true);
+    try {
+      AUTH.client = makeClient(AUTH.cfg, remember ? localStorage : sessionStorage);
+      AUTH.client.auth.onAuthStateChange((event, sess) => {
+        if (event === 'PASSWORD_RECOVERY') { showAuth('reset'); return; }
+        if (event === 'SIGNED_OUT') { onSignedOut(); return; }
+      });
+      const { data, error } = await AUTH.client.auth.signInWithPassword({ email, password });
+      if (error) throw error;
+      $('login-password').value = '';
+      await onSignedIn(data.user);
+      toast('ログインしました');
+    } catch (e) {
+      const m = String(e?.message || e);
+      authMsg(/Email not confirmed/i.test(m) ? 'メールアドレスがまだ確認されていません。届いたメールのリンクを開いてください' : /Invalid login credentials/i.test(m) ? 'メールアドレスかパスワードが違います' : `ログインできません: ${m}`, 'error');
+    } finally { busy(btn, false); }
+  });
+
+  // 新規登録
+  $('form-signup').addEventListener('submit', async (ev) => {
+    ev.preventDefault();
+    const email = $('signup-email').value.trim();
+    const password = $('signup-password').value;
+    if (!validEmail(email)) { authMsg('メールアドレスの形式を確認してください', 'error'); return; }
+    if (password.length < 8) { authMsg('パスワードは8文字以上にしてください', 'error'); return; }
+    const newsletter = $('signup-newsletter').checked;
+    const btn = $('signup-submit'); busy(btn, true);
+    try {
+      const { data, error } = await AUTH.client.auth.signUp({
+        email, password,
+        options: { data: { newsletter_opt_in: newsletter }, emailRedirectTo: location.origin + location.pathname },
+      });
+      if (error) throw error;
+      if (data.session) { await onSignedIn(data.user); toast('登録しました'); return; }
+      authMsg(`${email} に確認メールを送りました。メール内のリンクを開いてからログインしてください`, 'ok');
+      showAuthViewKeepMsg('login', `${email} に確認メールを送りました。メール内のリンクを開いてからログインしてください`);
+      $('login-email').value = email;
+    } catch (e) {
+      const m = String(e?.message || e);
+      authMsg(/already registered/i.test(m) ? 'このメールアドレスは登録済みです。ログインしてください' : `登録できません: ${m}`, 'error');
+    } finally { busy(btn, false); }
+  });
+  const showAuthViewKeepMsg = (view, msg) => { showAuthView(view); authMsg(msg, 'ok'); };
+
+  // パスワード再設定メール
+  $('form-forgot').addEventListener('submit', async (ev) => {
+    ev.preventDefault();
+    const email = $('forgot-email').value.trim();
+    if (!validEmail(email)) { authMsg('メールアドレスの形式を確認してください', 'error'); return; }
+    const btn = $('forgot-submit'); busy(btn, true);
+    try {
+      const { error } = await AUTH.client.auth.resetPasswordForEmail(email, { redirectTo: location.origin + location.pathname });
+      if (error) throw error;
+      authMsg(`${email} に再設定用のメールを送りました。リンクを開くと新しいパスワードを設定できます`, 'ok');
+    } catch (e) { authMsg(`送信できません: ${String(e?.message || e)}`, 'error'); }
+    finally { busy(btn, false); }
+  });
+
+  // 新しいパスワード（メールのリンクから戻ってきたとき）
+  $('form-reset').addEventListener('submit', async (ev) => {
+    ev.preventDefault();
+    const password = $('reset-password').value;
+    if (password.length < 8) { authMsg('パスワードは8文字以上にしてください', 'error'); return; }
+    const btn = $('reset-submit'); busy(btn, true);
+    try {
+      const { data, error } = await AUTH.client.auth.updateUser({ password });
+      if (error) throw error;
+      $('reset-password').value = '';
+      toast('パスワードを更新しました');
+      if (data?.user) await onSignedIn(data.user); else showAuthView('login');
+    } catch (e) { authMsg(`更新できません: ${String(e?.message || e)}`, 'error'); }
+    finally { busy(btn, false); }
+  });
+
+  // 設定画面のアカウント操作
+  $('acct-logout').addEventListener('click', async () => {
+    try { await AUTH.client?.auth.signOut(); } catch { /* ignore */ }
+    AUTH.user = null;
+    renderAccount();
+    toast('ログアウトしました');
+    showAuth('login');
+  });
+  $('acct-login').addEventListener('click', () => { localStorage.removeItem(GUEST_KEY); showAuth('login'); });
+  $('acct-sync-now').addEventListener('click', () => pullAll());
+
+  initAuth();
+
   // ---------- 初期描画 ----------
   renderAll();
+  updateLive(calc.pair);
+  setInterval(() => {
+    if (document.visibilityState === 'visible' && settings.liveQuote && $('screen-calc').classList.contains('is-active')) updateLive(calc.pair);
+  }, LIVE_INTERVAL_MS);
+  document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState === 'visible' && settings.liveQuote) {
+      const q = quotes[calc.pair];
+      if (!q || Date.now() - q.time > LIVE_INTERVAL_MS) updateLive(calc.pair);
+    }
+  });
 })();
